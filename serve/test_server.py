@@ -1219,7 +1219,9 @@ class ClientShapes(unittest.TestCase):
             {"type": "additional_tools", "tools": [
                 {"type": "namespace", "name": "functions", "tools": [
                     {"type": "custom", "name": "exec", "description": "run code"}]}]}],
-            "tools": [{"type": "custom", "name": "exec", "description": "run code"},
+            "tools": [{"type": "custom", "name": "exec", "description": "run code",
+                       "format": {"type": "custom", "syntax": "lark",
+                                  "definition": "start: begin_patch hunk+ end_patch"}},
                       {"type": "namespace", "name": "srv", "tools": [
                           {"type": "function", "name": "read", "description": "d", "parameters": {"type": "object"}}]},
                       {"type": "web_search"}]})
@@ -1232,6 +1234,7 @@ class ClientShapes(unittest.TestCase):
         self.assertEqual(req["tools"][0]["function"]["parameters"],
                          {"type": "object", "properties": {"input": {"type": "string"}}, "required": ["input"]})
         self.assertEqual(req["tools"][1]["function"]["description"], "d")
+        self.assertIn("begin_patch hunk+", req["tools"][0]["function"]["description"])   # the custom tool's grammar spec survives
 
     def test_tool_call_malformed_arguments_fallback(self):
         from serve.frontend import openai_to_messages

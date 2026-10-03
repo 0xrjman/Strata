@@ -1005,6 +1005,9 @@ def responses_to_chat(req: dict) -> dict:
                               "function": {k: t[k] for k in ("name", "description", "parameters") if k in t}})
             elif t.get("type") == "custom":
                 fn = {k: t[k] for k in ("name", "description") if k in t}
+                spec = (t.get("format") or {}).get("definition")   # a chat tool schema has no grammar slot: the spec travels in the description
+                if spec:
+                    fn["description"] = f"{fn.get('description', '')}\n{spec}".strip()
                 fn["parameters"] = {"type": "object", "properties": {"input": {"type": "string"}}, "required": ["input"]}
                 tools.append({"type": "function", "function": fn})
             elif t.get("type") == "namespace":
