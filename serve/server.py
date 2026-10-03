@@ -51,12 +51,14 @@ from pathlib import Path
 from typing import Iterator, Protocol
 from urllib.parse import parse_qs, urlsplit
 
+import jinja2
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(ROOT))   # run as a script (run-<model>.bat) as well as a module
 from serve.frontend import (ChatTemplate, Event, OutputParser, anthropic_to_messages,  # noqa: E402
                             forced_call, images_of, literal_tags, mark_think_literals, openai_to_messages,
-                            tool_choice_of, unmark_think_literals)
+                            responses_to_chat, tool_choice_of, unmark_think_literals)
 from serve.mcp import McpCancelled, hub_from_config  # noqa: E402
 from serve import runconfig  # noqa: E402
 from serve.winjob import contain  # noqa: E402
@@ -3576,6 +3578,155 @@ def anthropic_collect(events) -> dict:
     return msg
 
 
+# ------------------------------------------------------------------------------------------------ Responses
+def responses_events(svc: Service, req: dict, ids, thinking, tools, max_new, cancel, run=None,
+                     custom_names=frozenset()):
+    rid = "resp_" + uuid.uuid4().hex[:24]
+    resp = {"id": rid, "object": "response", "created_at": int(time.time()), "model": svc.model,
+            "status": "in_progress", "output": []}
+    yield "response.created", {"type": "response.created", "response": resp}
+    yield "response.in_progress", {"type": "response.in_progress", "response": resp}
+    items, index, open_kind = resp["output"], -1, None
+    streamed = set()
+    reasoning_text = ""
+
+    def open_item(kind, item, part=None):
+        nonlocal index, open_kind
+        items.append(item)
+        index += 1
+        open_kind = kind
+        yield ("response.output_item.added", {"type": "response.output_item.added", "output_index": index,
+                                             "item": item})
+        if part is not None:
+            yield ("response.content_part.added", {"type": "response.content_part.added", "output_index": index,
+                                                   "content_index": 0, "part": part})
+
+    def call_item(name, call_id):
+        head, dot, tail = name.partition(".")
+        nsp = {"namespace": head} if dot else {}
+        if name in custom_names:
+            return {"type": "custom_tool_call", "id": "ctc_" + call_id, "call_id": call_id, "name": tail,
+                    "status": "completed", "input": "", **nsp}
+        return {"type": "function_call", "id": "fc_" + call_id, "call_id": call_id, "name": tail,
+                "status": "completed", "arguments": "", **nsp}
+
+    def item_nsp(it):
+        return {"namespace": it["namespace"]} if "namespace" in it else {}
+
+    def close_item():
+        nonlocal open_kind
+        if open_kind == "custom_tool_call":
+            it = items[index]
+            try:
+                it["input"] = json.loads(it["input"])["input"]
+            except (ValueError, TypeError, KeyError):
+                pass
+            yield ("response.custom_tool_call_input.done",
+                   {"type": "response.custom_tool_call_input.done", "output_index": index,
+                    "call_id": it["call_id"], "name": it["name"], "input": it["input"], **item_nsp(it)})
+        elif open_kind == "function_call":
+            it = items[index]
+            yield ("response.function_call_arguments.done",
+                   {"type": "response.function_call_arguments.done", "output_index": index,
+                    "call_id": it["call_id"], "name": it["name"], "arguments": it["arguments"], **item_nsp(it)})
+        elif open_kind == "reasoning":
+            it = items[index]
+            it["status"] = "completed"
+            part = it["content"][0]
+            yield ("response.reasoning_text.done",
+                   {"type": "response.reasoning_text.done", "output_index": index,
+                    "content_index": 0, "text": part["text"]})
+            yield ("response.content_part.done",
+                   {"type": "response.content_part.done", "output_index": index,
+                    "content_index": 0, "part": part})
+        elif open_kind is not None:
+            part = items[index]["content"][0]
+            yield ("response.output_text.done", {"type": "response.output_text.done", "output_index": index,
+                                                 "content_index": 0, "text": part["text"]})
+            yield ("response.content_part.done", {"type": "response.content_part.done", "output_index": index,
+                                                  "content_index": 0, "part": part})
+        if open_kind is not None:
+            yield ("response.output_item.done", {"type": "response.output_item.done", "output_index": index,
+                                                 "item": items[index]})
+        open_kind = None
+
+    for kind, x in run if run is not None else svc.run(ids, thinking, tools, max_new, req, cancel):
+        if kind == "ping":
+            yield None
+        elif kind == "mcp":
+            continue
+        elif kind == "event":
+            ev: Event = x
+            if ev.kind == "reasoning":
+                if not ev.text:
+                    continue
+                if open_kind != "reasoning":
+                    yield from close_item()
+                    item = {"type": "reasoning", "id": "rs_" + uuid.uuid4().hex[:24],
+                            "status": "in_progress",
+                            "summary": [{"type": "summary_text", "text": ""}],
+                            "content": [{"type": "reasoning_text", "text": ""}]}
+                    yield from open_item("reasoning", item, item["content"][0])
+                items[index]["content"][0]["text"] += ev.text
+                items[index]["summary"][0]["text"] = items[index]["content"][0]["text"]
+                yield ("response.reasoning_text.delta", {"type": "response.reasoning_text.delta", "output_index": index,
+                                                         "content_index": 0, "delta": ev.text})
+            elif ev.kind == "content":
+                if not ev.text:
+                    continue
+                if open_kind != "text":
+                    yield from close_item()
+                    item = {"type": "message", "role": "assistant", "id": "item_" + uuid.uuid4().hex[:24],
+                            "status": "completed", "content": [{"type": "output_text", "text": ""}]}
+                    yield from open_item("text", item, item["content"][0])
+                items[index]["content"][0]["text"] += ev.text
+                yield ("response.output_text.delta", {"type": "response.output_text.delta", "output_index": index,
+                                                      "content_index": 0, "delta": ev.text})
+            elif ev.kind == "tool_start":
+                streamed.add(ev.call.id)
+                yield from close_item()
+                ckind = "custom_tool_call" if ev.call.name in custom_names else "function_call"
+                yield from open_item(ckind, call_item(ev.call.name, ev.call.id))
+            elif ev.kind == "tool_args":
+                if open_kind == "custom_tool_call":
+                    items[index]["input"] += ev.text
+                    yield ("response.custom_tool_call_input.delta",
+                           {"type": "response.custom_tool_call_input.delta", "output_index": index, "delta": ev.text})
+                else:
+                    items[index]["arguments"] += ev.text
+                    yield ("response.function_call_arguments.delta",
+                           {"type": "response.function_call_arguments.delta", "output_index": index, "delta": ev.text})
+            elif ev.kind == "tool_call" and ev.call.id in streamed:
+                continue
+            elif ev.kind == "tool_call":
+                yield from close_item()
+                ckind = "custom_tool_call" if ev.call.name in custom_names else "function_call"
+                yield from open_item(ckind, call_item(ev.call.name, ev.call.id))
+                args = json.dumps(ev.call.arguments, ensure_ascii=False)
+                if ckind == "custom_tool_call":
+                    items[index]["input"] = args
+                    yield ("response.custom_tool_call_input.delta",
+                           {"type": "response.custom_tool_call_input.delta", "output_index": index, "delta": args})
+                else:
+                    items[index]["arguments"] = args
+                    yield ("response.function_call_arguments.delta",
+                           {"type": "response.function_call_arguments.delta", "output_index": index, "delta": args})
+                yield from close_item()
+        else:
+            yield from close_item()
+            pt = x.get("prompt_tokens", len(ids))
+            resp["status"] = "completed"
+            ot = x["completion_tokens"]
+            resp["usage"] = {"input_tokens": pt, "output_tokens": ot, "total_tokens": pt + ot}
+            yield "response.completed", {"type": "response.completed", "response": resp}
+
+
+def responses_collect(events) -> dict:
+    for item in events:
+        if item is not None and item[0] == "response.completed":
+            return item[1]["response"]
+
+
 # ------------------------------------------------------------------------------------------------ HTTP
 def make_handler(svc: Service):
     class Handler(BaseHTTPRequestHandler):
@@ -3972,6 +4123,8 @@ def make_handler(svc: Service):
                     self._anthropic(req)
                 elif path == "/v1/messages/count_tokens":
                     self._count_tokens(req)
+                elif path == "/v1/responses":
+                    self._responses(req)
                 else:
                     self._json(404, {"error": {"message": "not found"}})
             except ValueError as e:
@@ -3980,6 +4133,8 @@ def make_handler(svc: Service):
                     self._json(400, responses_error_body(str(e)))
                 else:
                     self._json(400, {"error": {"type": "invalid_request_error", "message": str(e)}})
+            except jinja2.TemplateError as e:               # a rejected role/kind: a 400, not a dropped connection
+                self._json(400, {"error": {"type": "invalid_request_error", "message": str(e)}})
             except ModelBusy as e:
                 self._json(409, {"error": {"type": "model_busy", "message": str(e)}})
             except StructuredOutputError as e:
@@ -4428,6 +4583,56 @@ def make_handler(svc: Service):
             except ValueError as e:                          # the engine's ERR after the stream started
                 err = {"type": "error", "error": {"type": "api_error", "message": str(e)}}
                 self._note(error=err["error"])
+                self.wfile.write(b"event: error\ndata: " + json.dumps(err).encode() + b"\n\n")
+
+        def _responses(self, req):
+            decls = list(req.get("tools") or []) + [t for it in req.get("input") or []
+                                                    if isinstance(it, dict) and it.get("type") == "additional_tools"
+                                                    for t in it.get("tools") or []]
+            custom = {t.get("name") for t in decls if isinstance(t, dict) and t.get("type") == "custom"}
+            custom |= {f"{t['name']}.{s['name']}" for t in decls if isinstance(t, dict) and t.get("type") == "namespace"
+                       for s in t.get("tools") or [] if isinstance(s, dict) and s.get("type") == "custom"}
+            req = responses_to_chat(req)
+            req = svc.with_shared(req, "openai")
+            messages, tools, kw = openai_to_messages(req)
+            svc.load()
+            max_req = max_new = int(req.get("max_completion_tokens") or req.get("max_tokens") or 0)   # 0/-1: the rest
+            use_mcp = req.get("strata_mcp") is True and svc.mcp is not None
+            own = {t.get("name") for t in tools or []}
+            if use_mcp:
+                if not self._own_page("MCP tools can be used"):
+                    return
+                svc.mcp.wait(10)
+                extra = svc.mcp.template_tools(exclude=own)
+                use_mcp = bool(extra)
+                tools = (tools or []) + extra or None
+            ids, thinking, max_new = svc.prepare(messages, tools, kw, max_new)
+            _debug_req("responses", req, messages, tools, max_new, thinking, len(ids))
+            cancel = threading.Event()
+            self._watch_client(cancel)                       # #430 #431
+            run = run_with_mcp(svc, svc.mcp, messages, tools, kw, ids, thinking, max_new, max_req, req, cancel,
+                               {t["name"] for t in extra}) if use_mcp else None
+            events = responses_events(svc, req, ids, thinking, tools, max_new, cancel, run=run, custom_names=custom)
+            if not req.get("stream"):
+                return self._json(200, responses_collect(events))
+            self._sse()
+            try:
+                for item in events:
+                    if item is None:
+                        self.wfile.write(b": keep-alive\n\n")
+                    else:
+                        name, e = item
+                        self.wfile.write(f"event: {name}\n".encode() + b"data: " +
+                                         json.dumps(e, ensure_ascii=False).encode() + b"\n\n")
+                    self.wfile.flush()
+            except OSError:
+                cancel.set()
+                events.close()
+            except EngineDied as e:
+                err = {"type": "error", "error": {"type": "api_error", "message": f"{e}; the next request restarts it"}}
+                self.wfile.write(b"event: error\ndata: " + json.dumps(err).encode() + b"\n\n")
+            except ValueError as e:
+                err = {"type": "error", "error": {"type": "api_error", "message": str(e)}}
                 self.wfile.write(b"event: error\ndata: " + json.dumps(err).encode() + b"\n\n")
 
     return Handler

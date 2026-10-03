@@ -133,6 +133,8 @@ def _parts_of(content):
             items.append({"type": "image", "source": _image_source(part)})
         elif part.get("type") in ("text", "input_text", None) and "text" in part:
             items.append({"type": "text", "text": part.get("text", "")})
+        elif part.get("type") == "tool_reference":
+            items.append({"type": "text", "text": part.get("tool_name", "")})
     return items
 
 
@@ -394,6 +396,8 @@ def anthropic_to_messages(req: dict, think_unasked: bool = True) -> tuple[list[d
                 reasoning.append(block.get("thinking", ""))
             elif kind == "tool_use":
                 calls.append({"function": {"name": block.get("name"), "arguments": tool_arguments(block.get("input"))}})
+            elif kind == "tool_reference":
+                text.append(block.get("tool_name", ""))
             elif kind == "tool_result":
                 # A tool's image (Claude Code's Read of a picture) reaches the encoder like a user's, as the OpenAI
                 # path's tool messages already do; a text-only result is one string, as before.
@@ -407,7 +411,7 @@ def anthropic_to_messages(req: dict, think_unasked: bool = True) -> tuple[list[d
                 out["tool_calls"] = calls
             messages.append(out)
     tools = [{"name": t["name"], "description": t.get("description", ""), "parameters": t.get("input_schema", {})}
-             for t in _tool_list(req.get("tools"), None)] or None
+             for t in _tool_list(req.get("tools"), None) if not t.get("defer_loading")] or None
     kwargs = {}
     # Anthropic: "thinking": {"type": "disabled"} or {"type": "enabled", "budget_tokens": N};
     # "output_config": {"effort": "low" | "medium" | "high"}
@@ -944,3 +948,67 @@ class OutputParser:
             out.append(Event(kind, text))
             self.buf = ""
         return out
+
+
+RESPONSES_DROP = {"input", "store", "previous_response_id", "include", "background", "truncation", "metadata"}
+
+
+def responses_to_chat(req: dict) -> dict:
+    out = {k: v for k, v in req.items() if k not in RESPONSES_DROP}
+    items = req.get("input")
+    if isinstance(items, str):
+        items = [{"role": "user", "content": items}]
+    messages = []
+    extra_tools = []
+    for it in items or []:
+        if isinstance(it, str):
+            it = {"role": "user", "content": it}
+        kind = it.get("type")
+        if kind == "reasoning":
+            continue
+        if kind == "function_call":
+            messages.append({"role": "assistant", "tool_calls": [{"id": it.get("call_id"), "type": "function",
+                                                                  "function": {"name": f"{it['namespace']}.{it['name']}" if it.get("namespace") else it.get("name"),
+                                                                               "arguments": it.get("arguments")}}]})
+        elif kind == "function_call_output":
+            messages.append({"role": "tool", "tool_call_id": it.get("call_id"), "content": it.get("output")})
+        elif kind == "custom_tool_call":
+            messages.append({"role": "assistant", "tool_calls": [{"id": it.get("call_id"), "type": "function",
+                                                                  "function": {"name": f"{it['namespace']}.{it['name']}" if it.get("namespace") else it.get("name"),
+                                                                               "arguments": json.dumps({"input": it.get("input", "")}, ensure_ascii=False)}}]})
+        elif kind == "custom_tool_call_output":
+            messages.append({"role": "tool", "tool_call_id": it.get("call_id"), "content": it.get("output")})
+        elif kind == "agent_message":
+            messages.append({"role": "assistant", "content": it.get("content")})
+        elif kind == "additional_tools":
+            extra_tools += it.get("tools") or []
+        elif kind in (None, "message"):
+            messages.append({"role": it.get("role") or "user", "content": it.get("content")})
+        else:
+            messages.append(it)
+    out["messages"] = messages
+    if "max_output_tokens" in out:
+        out["max_tokens"] = out.pop("max_output_tokens")
+    text = out.pop("text", None)
+    if isinstance(text, dict) and text.get("format"):
+        out["response_format"] = text["format"]
+    tools_in = (out.get("tools") or []) + extra_tools
+    if tools_in:
+        tools = []
+        for t in tools_in:
+            if not isinstance(t, dict):
+                continue
+            if t.get("type") == "function":
+                tools.append({"type": "function",
+                              "function": {k: t[k] for k in ("name", "description", "parameters") if k in t}})
+            elif t.get("type") == "custom":
+                fn = {k: t[k] for k in ("name", "description") if k in t}
+                fn["parameters"] = {"type": "object", "properties": {"input": {"type": "string"}}, "required": ["input"]}
+                tools.append({"type": "function", "function": fn})
+            elif t.get("type") == "namespace":
+                for sub in t.get("tools") or []:
+                    fn = {k: sub[k] for k in ("description", "parameters") if k in sub}
+                    fn["name"] = f"{t['name']}.{sub['name']}"
+                    tools.append({"type": "function", "function": fn})
+        out["tools"] = tools
+    return out
