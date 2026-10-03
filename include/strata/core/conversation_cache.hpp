@@ -253,12 +253,14 @@ public:
     }
 
     // #342: drop the parked entries an outgoing conversation (its live tokens and checkpoint chain) supersedes:
-    // the same conversation a turn back, whose DEEPEST checkpoint the outgoing chain still holds, so all it adds
-    // is the tail the client rewrote (the reply as it was generated, before the next request re-rendered it) and
-    // checkpoints older than that one.  A subagent's successive turns parked one such copy each, and make_room's
-    // oldest-first eviction then pushed the parent conversation out after `slots` turns.  An entry without
-    // checkpoints, or whose deepest checkpoint the outgoing chain does not hold (another conversation that only
-    // shares the system prompt's root with it), is kept.  Returns how many were dropped.
+    // the same conversation a turn back, whose DEEPEST checkpoint the outgoing chain still holds and whose own
+    // live is no deeper than that chain, so all it adds is the tail the client rewrote (the reply as it was
+    // generated, before the next request re-rendered it) and checkpoints older than that one.  A subagent's
+    // successive turns parked one such copy each, and make_room's oldest-first eviction then pushed the parent
+    // conversation out after `slots` turns.  An entry without checkpoints, of the other steering mode, whose
+    // deepest checkpoint the outgoing chain does not hold (another conversation that only shares the system
+    // prompt's root with it), or whose live reaches past everything the outgoing chain holds (a branch the
+    // outgoing conversation cannot reproduce) is kept.  Returns how many were dropped.
     size_t drop_superseded(const std::vector<int32_t>& ids, const std::vector<ConversationImageKey>& images,
                            const std::vector<ConversationCheckpoint>& checkpoints, bool cvec) {
         auto held = [&](const ConversationCheckpoint& c) {
@@ -267,13 +269,17 @@ public:
                 if (k.ids == c.ids && k.imgs == c.imgs) return true;
             return false;
         };
+        size_t out_max = ids.size();
+        for (const auto& k : checkpoints) out_max = std::max(out_max, k.ids.size());
         size_t dropped = 0;
         for (size_t i = 0; i < entries_.size();) {
             const auto& e = entries_[i];
             const ConversationCheckpoint* deepest = nullptr;
             for (const auto& c : e.checkpoints)
                 if (!deepest || c.ids.size() > deepest->ids.size()) deepest = &c;
-            if (e.cvec == cvec && deepest && !deepest->ids.empty() && held(*deepest)) {
+            // live KV deeper than anything the outgoing chain holds is not a superseded copy
+            if (e.cvec == cvec && deepest && !deepest->ids.empty() && held(*deepest) &&
+                e.live.ids.size() <= out_max) {
                 bytes_ -= e.bytes();
                 entries_.erase(entries_.begin() + (std::ptrdiff_t) i);
                 ++dropped;
