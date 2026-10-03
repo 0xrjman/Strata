@@ -67,7 +67,7 @@ def _text_of(content) -> str:
     if isinstance(content, str):
         return content
     return "".join(part.get("text", "") for part in content if isinstance(part, dict) and part.get("type") in
-                   ("text", "input_text", None))
+                   ("text", "input_text", "output_text", None))
 
 
 IMAGE_PARTS = ("image_url", "input_image", "image")
@@ -131,7 +131,7 @@ def _parts_of(content):
             continue
         if part.get("type") in IMAGE_PARTS:
             items.append({"type": "image", "source": _image_source(part)})
-        elif part.get("type") in ("text", "input_text", None) and "text" in part:
+        elif part.get("type") in ("text", "input_text", "output_text", None) and "text" in part:
             items.append({"type": "text", "text": part.get("text", "")})
         elif part.get("type") == "tool_reference":
             items.append({"type": "text", "text": part.get("tool_name", "")})
@@ -950,7 +950,7 @@ class OutputParser:
         return out
 
 
-RESPONSES_DROP = {"input", "store", "previous_response_id", "include", "background", "truncation", "metadata"}
+RESPONSES_DROP = {"input", "store", "previous_response_id", "include", "background", "truncation", "metadata", "instructions"}
 
 
 def responses_to_chat(req: dict) -> dict:
@@ -986,6 +986,8 @@ def responses_to_chat(req: dict) -> dict:
             messages.append({"role": it.get("role") or "user", "content": it.get("content")})
         else:
             messages.append(it)
+    if req.get("instructions"):
+        messages.insert(0, {"role": "system", "content": req["instructions"]})
     out["messages"] = messages
     if "max_output_tokens" in out:
         out["max_tokens"] = out.pop("max_output_tokens")

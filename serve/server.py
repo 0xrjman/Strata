@@ -3605,9 +3605,9 @@ def responses_events(svc: Service, req: dict, ids, thinking, tools, max_new, can
         head, dot, tail = name.partition(".")
         nsp = {"namespace": head} if dot else {}
         if name in custom_names:
-            return {"type": "custom_tool_call", "id": "ctc_" + call_id, "call_id": call_id, "name": tail,
+            return {"type": "custom_tool_call", "id": "ctc_" + call_id, "call_id": call_id, "name": tail if dot else name,
                     "status": "completed", "input": "", **nsp}
-        return {"type": "function_call", "id": "fc_" + call_id, "call_id": call_id, "name": tail,
+        return {"type": "function_call", "id": "fc_" + call_id, "call_id": call_id, "name": tail if dot else name,
                 "status": "completed", "arguments": "", **nsp}
 
     def item_nsp(it):
@@ -4629,11 +4629,11 @@ def make_handler(svc: Service):
                 cancel.set()
                 events.close()
             except EngineDied as e:
-                err = {"type": "error", "error": {"type": "api_error", "message": f"{e}; the next request restarts it"}}
-                self.wfile.write(b"event: error\ndata: " + json.dumps(err).encode() + b"\n\n")
+                err = {"type": "response.failed", "error": {"type": "api_error", "message": f"{e}; the next request restarts it"}}
+                self.wfile.write(b"event: response.failed\ndata: " + json.dumps(err).encode() + b"\n\n")
             except ValueError as e:
-                err = {"type": "error", "error": {"type": "api_error", "message": str(e)}}
-                self.wfile.write(b"event: error\ndata: " + json.dumps(err).encode() + b"\n\n")
+                err = {"type": "response.failed", "error": {"type": "api_error", "message": str(e)}}
+                self.wfile.write(b"event: response.failed\ndata: " + json.dumps(err).encode() + b"\n\n")
 
     return Handler
 
