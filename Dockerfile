@@ -45,6 +45,7 @@ FROM nvidia/cuda:13.0.0-devel-ubuntu24.04
 # don't set it, keep spawning the server as a child.
 ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1 LANG=C.UTF-8 STRATA_EXECV=1
 
+RUN sed -i 's|http://archive.ubuntu.com/ubuntu|https://mirrors.ustc.edu.cn/ubuntu|g; s|http://security.ubuntu.com/ubuntu|https://mirrors.ustc.edu.cn/ubuntu|g' /etc/apt/sources.list.d/*.sources 2>/dev/null || true
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential ca-certificates curl git libatomic1 libgomp1 \
         python3 python3-pip python3-venv unzip \
@@ -54,9 +55,10 @@ WORKDIR /opt/strata
 
 # requirements first: a change to serve/*.py or src/*.cpp alone reuses this layer.
 COPY requirements.txt .
+ARG PIP_INDEX_URL=https://mirrors.ustc.edu.cn/pypi/web/simple
 RUN python3 -m venv .venv \
-    && .venv/bin/pip install --no-cache-dir --upgrade pip \
-    && .venv/bin/pip install --no-cache-dir -r requirements.txt
+    && .venv/bin/pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" --timeout 60 --retries 10 --upgrade pip \
+    && .venv/bin/pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" --timeout 60 --retries 10 -r requirements.txt
 COPY . .
 RUN chmod +x setup.sh docker-entrypoint.sh
 
