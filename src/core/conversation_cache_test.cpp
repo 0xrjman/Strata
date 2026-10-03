@@ -208,7 +208,8 @@ int main() {
     }
     {
         // what is NOT superseded: another conversation sharing only the root, an entry without checkpoints, the
-        // other steering mode, a branch whose deepest checkpoint the new chain does not hold
+        // other steering mode, a branch whose deepest checkpoint the new chain does not hold, a branch whose live
+        // reaches past everything the new chain holds
         auto cp = [](std::vector<int32_t> ids) { ConversationCheckpoint c; c.ids = std::move(ids); return c; };
         ConversationCache cache(1 << 20, 8);
         SavedConversation other = image({1, 2, 3, 4, 50, 51, 52});
@@ -227,13 +228,27 @@ int main() {
         check(cache.size() == 5 && cache.superseded() == 0, "none of them is superseded");
         SavedConversation same_state = image({1, 2, 3, 4, 60, 70});   // live equal to the branch's deepest point
         same_state.checkpoints = {cp({1, 2, 3, 4})};
-        check(cache.put(std::move(same_state)) && cache.superseded() == 1 && cache.size() == 5,
-              "the live state equal to an entry's deepest checkpoint supersedes it");
+        check(cache.put(std::move(same_state)) && cache.superseded() == 0 && cache.size() == 6,
+              "holding an entry's deepest checkpoint does not supersede its deeper live");
         SavedConversation huge = image({1, 2, 3, 4, 60, 80});
         huge.checkpoints = {cp({1, 2, 3, 4}), cp({1, 2, 3, 4, 60})};
         huge.live.gdn.resize(2 << 20);
-        check(!cache.put(std::move(huge)) && cache.size() == 5 && cache.superseded() == 1,
+        check(!cache.put(std::move(huge)) && cache.size() == 6 && cache.superseded() == 0,
               "an oversized put drops nothing");
+    }
+    {
+        // a parked entry whose live KV is deeper than anything the outgoing chain holds is not a superseded copy
+        auto cp = [](std::vector<int32_t> ids) { ConversationCheckpoint c; c.ids = std::move(ids); return c; };
+        ConversationCache cache(1 << 20, 8);
+        SavedConversation deep = image({1, 2, 3, 4, 60, 70, 71, 72});
+        deep.checkpoints = {cp({1, 2, 3, 4}), cp({1, 2, 3, 4, 60})};
+        cache.put(std::move(deep));
+        SavedConversation outgoing = image({1, 2, 3, 4, 60, 80});
+        outgoing.checkpoints = {cp({1, 2, 3, 4}), cp({1, 2, 3, 4, 60})};
+        check(cache.put(std::move(outgoing)) && cache.superseded() == 0 && cache.size() == 2,
+              "a shallower outgoing branch keeps the deeper live KV");
+        check(cache.best(std::vector<int64_t>{1, 2, 3, 4, 60, 70, 71, 72, 99}, {}, true).live,
+              "the deeper entry can still be taken back");
     }
     {
         ConversationCache disabled(0,4), no_slots(1024,0);
