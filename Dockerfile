@@ -51,17 +51,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/strata
+
+# requirements first: a change to serve/*.py or src/*.cpp alone reuses this layer.
+COPY requirements.txt .
+RUN python3 -m venv .venv \
+    && .venv/bin/pip install --no-cache-dir --upgrade pip \
+    && .venv/bin/pip install --no-cache-dir -r requirements.txt
 COPY . .
+RUN chmod +x setup.sh docker-entrypoint.sh
 
 # RTX 20 (75), RTX 30 (86), RTX 40 (89), RTX 50 (120), plus 80 for A-series. CMakeLists
 # refuses anything below 75. BUILD_VISION=0 skips the image encoder build.
 ARG CUDA_ARCHITECTURES=75;80;86;89;120
 ARG BUILD_VISION=1
-
-RUN python3 -m venv .venv \
-    && .venv/bin/pip install --no-cache-dir --upgrade pip \
-    && .venv/bin/pip install --no-cache-dir -r requirements.txt \
-    && chmod +x setup.sh docker-entrypoint.sh
 
 # llama.cpp at the pinned commit, then the engine and the image encoder, built
 # exactly the way setup.py builds them. BUILD.json is what setup.py reads to
