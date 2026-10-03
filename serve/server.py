@@ -3579,6 +3579,20 @@ def anthropic_collect(events) -> dict:
 
 
 # ------------------------------------------------------------------------------------------------ Responses
+def custom_input(text: str) -> str:
+    """The bare value of a custom tool's `input` argument, from the JSON as it streams (may be partial)."""
+    if (len(text) - len(text.rstrip("\\"))) % 2:
+        text = text[:-1]                      # an escape pair split across deltas
+    for cand in (text, text + '"}', text + "}"):
+        try:
+            v = json.loads(cand)
+        except ValueError:
+            continue
+        if isinstance(v, dict) and isinstance(v.get("input"), str):
+            return v["input"]
+    return ""
+
+
 def responses_events(svc: Service, req: dict, ids, thinking, tools, max_new, cancel, run=None,
                      custom_names=frozenset()):
     rid = "resp_" + uuid.uuid4().hex[:24]
@@ -3587,7 +3601,7 @@ def responses_events(svc: Service, req: dict, ids, thinking, tools, max_new, can
     yield "response.created", {"type": "response.created", "response": resp}
     yield "response.in_progress", {"type": "response.in_progress", "response": resp}
     items, index, open_kind = resp["output"], -1, None
-    streamed = set()
+    streamed, sent = set(), {}
     reasoning_text = ""
 
     def open_item(kind, item, part=None):
@@ -3690,8 +3704,10 @@ def responses_events(svc: Service, req: dict, ids, thinking, tools, max_new, can
             elif ev.kind == "tool_args":
                 if open_kind == "custom_tool_call":
                     items[index]["input"] += ev.text
+                    text = custom_input(items[index]["input"])
+                    delta, sent[index] = text[sent.get(index, 0):], len(text)
                     yield ("response.custom_tool_call_input.delta",
-                           {"type": "response.custom_tool_call_input.delta", "output_index": index, "delta": ev.text})
+                           {"type": "response.custom_tool_call_input.delta", "output_index": index, "delta": delta})
                 else:
                     items[index]["arguments"] += ev.text
                     yield ("response.function_call_arguments.delta",
@@ -3706,7 +3722,8 @@ def responses_events(svc: Service, req: dict, ids, thinking, tools, max_new, can
                 if ckind == "custom_tool_call":
                     items[index]["input"] = args
                     yield ("response.custom_tool_call_input.delta",
-                           {"type": "response.custom_tool_call_input.delta", "output_index": index, "delta": args})
+                           {"type": "response.custom_tool_call_input.delta", "output_index": index,
+                            "delta": custom_input(args)})
                 else:
                     items[index]["arguments"] = args
                     yield ("response.function_call_arguments.delta",

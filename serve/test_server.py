@@ -2489,18 +2489,38 @@ class ResponsesCustomTools(unittest.TestCase):
         tok = ByteTokenizer()
         svc = Service(MockEngine(tok, "ok", max_context=CTX), tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
         run = [("event", Event("tool_start", call=ToolCall("functions.exec", {}, "c1"))),
-               ("event", Event("tool_args", text='{"input": "echo ')),
-               ("event", Event("tool_args", text='hi"}')),
+               ("event", Event("tool_args", text='{"input": "')),
+               ("event", Event("tool_args", text='echo hi\\')),        # an escape pair split across deltas
+               ("event", Event("tool_args", text='nbye\\"')),
+               ("event", Event("tool_args", text='"')),
+               ("event", Event("tool_args", text='}')),
                ("event", Event("tool_call", call=ToolCall("functions.exec", {}, "c1"))),
                ("done", {"completion_tokens": 3})]
-        r = responses_collect(responses_events(svc, {}, [], False, None, 8, threading.Event(), run=run,
-                                               custom_names={"functions.exec"}))
+        evs = list(responses_events(svc, {}, [], False, None, 8, threading.Event(), run=run,
+                                    custom_names={"functions.exec"}))
+        # the deltas are the patch text itself, no {"input": ...} shell
+        deltas = "".join(e[1]["delta"] for e in evs if e[0] == "response.custom_tool_call_input.delta")
+        self.assertEqual(deltas, 'echo hi\nbye"')
+        r = responses_collect(evs)
         items = [i for i in r["output"] if i["type"] == "custom_tool_call"]
         self.assertEqual(len(items), 1)
         self.assertEqual((items[0]["name"], items[0]["namespace"]), ("exec", "functions"))
-        self.assertEqual(items[0]["input"], "echo hi")
+        self.assertEqual(items[0]["input"], 'echo hi\nbye"')
         self.assertEqual(items[0]["id"], "ctc_c1")
         self.assertEqual(items[0]["status"], "completed")
+
+    def test_unstreamed_call(self):
+        """A call that arrives whole (no tool_start/tool_args): its delta is unwrapped too."""
+        from serve.frontend import Event, ToolCall
+        from serve.server import responses_events
+        tok = ByteTokenizer()
+        svc = Service(MockEngine(tok, "ok", max_context=CTX), tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
+        run = [("event", Event("tool_call", call=ToolCall("apply_patch", {"input": "*** Begin Patch"}, "c2"))),
+               ("done", {"completion_tokens": 2})]
+        evs = list(responses_events(svc, {}, [], False, None, 8, threading.Event(), run=run,
+                                    custom_names={"apply_patch"}))
+        deltas = [e[1]["delta"] for e in evs if e[0] == "response.custom_tool_call_input.delta"]
+        self.assertEqual(deltas, ["*** Begin Patch"])
 
 
 class TimingsDrafts(unittest.TestCase):
