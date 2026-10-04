@@ -90,7 +90,7 @@ class Parsing(unittest.TestCase):
 
     def test_unsupported_items_are_named(self):
         for items, param in (([{"type": "item_reference", "id": "msg_1"}], "input[0]"),
-                             ([{"type": "web_search_call"}], "input[0].type"),
+                             ([{}], "input[0]"),
                              ([{"role": "user", "content": [{"type": "input_file", "file_id": "f"}]}],
                               "input[0].content[0].type"),
                              ([{"role": "robot", "content": "x"}], "input[0].role")):
@@ -99,6 +99,16 @@ class Parsing(unittest.TestCase):
             self.assertEqual(e.exception.param, param)
         with self.assertRaises(ResponsesError):
             input_messages({})
+
+    def test_codex_subagent_items(self):
+        msgs = input_messages({"input": [
+            {"role": "user", "content": "go"},
+            {"type": "agent_message", "id": "amsg_1", "author": "/root/repo_state", "recipient": "/root",
+             "content": [{"type": "input_text", "text": "Payload:\ndone."}]},
+            {"type": "web_search_call", "action": {"type": "search"}},
+            {"type": "agent_status", "status": "idle"}]})
+        self.assertEqual(msgs, [{"role": "user", "content": "go"},
+                                {"role": "assistant", "content": "Payload:\ndone."}])
 
     def test_tools_namespaces_custom_and_hosted(self):
         tools, names, skipped = request_tools({"tools": [
