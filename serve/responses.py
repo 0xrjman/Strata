@@ -156,8 +156,8 @@ def input_messages(req: dict) -> list[dict]:
         if not isinstance(item, dict):
             raise ResponsesError("expected an input item object", param)
         kind = item.get("type") or ("message" if "role" in item else None)
-        if kind == "message":
-            role = item.get("role")
+        if kind in ("message", "agent_message"):           # Codex subagents: agent_message has no role, it is the sending agent's own turn
+            role = item.get("role") if kind == "message" else "assistant"
             if role not in ("user", "assistant", "system", "developer"):
                 raise ResponsesError(f"unknown message role {role!r}", param + ".role")
             content = _content(item.get("content"), param + ".content")
@@ -196,9 +196,10 @@ def input_messages(req: dict) -> list[dict]:
         elif kind == "item_reference":
             raise ResponsesError("item references need stored responses, and this server keeps none: send the items "
                                  "themselves", param, "unsupported_parameter")
-        else:
-            raise ResponsesError(f"input items of type {kind!r} are not supported", param + ".type",
-                                 "unsupported_parameter")
+        elif kind is None:
+            raise ResponsesError("expected an input item with a type", param)
+        else:                                              # Codex-only item types (agent_status, collab_*, hosted tool calls): no place in the chat template, drop them
+            continue
     _order_tool_results(messages)
     # leading system/developer messages (Codex: instructions, then its developer message) become one system message
     # at the start; later ones become user messages in place, as on the chat path
