@@ -53,6 +53,11 @@ def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
 
 
+def flat_name(namespace, name: str) -> str:
+    """The template tool name of a namespaced tool.  Codex sends `name` already flat with `namespace` beside it."""
+    return name if namespace and name.startswith(f"{namespace}.") else (f"{namespace}.{name}" if namespace else name)
+
+
 # ------------------------------------------------------------------------------------------------ request -> chat
 def _content(content, param):
     """A message's (or a tool output's) content -> the template's form: a string, or text and image parts."""
@@ -74,6 +79,8 @@ def _content(content, param):
             parts.append({"type": "text", "text": part.get("text") or ""})
         elif kind == "refusal":
             parts.append({"type": "text", "text": part.get("refusal") or ""})
+        elif kind == "tool_reference":                       # Codex/Anthropic: a named tool, no content to render
+            parts.append({"type": "text", "text": part.get("tool_name") or ""})
         elif kind in ("input_image", "image_url"):
             if not part.get("image_url"):
                 raise ResponsesError("only images given as image_url (a data: or http(s) URL) are supported; "
@@ -178,8 +185,7 @@ def input_messages(req: dict) -> list[dict]:
             name = item.get("name")
             if not isinstance(name, str) or not name:
                 raise ResponsesError("a function_call needs a name", param + ".name")
-            if item.get("namespace"):
-                name = f"{item['namespace']}.{name}"
+            name = flat_name(item.get("namespace"), name)
             if kind == "function_call":
                 args = _arguments(item.get("arguments"), param + ".arguments")
             else:
@@ -191,6 +197,8 @@ def input_messages(req: dict) -> list[dict]:
             messages.append({"role": "tool", "content": _tool_output(item, param), "_call_id": item.get("call_id")})
             open_turn = None
             thinking.clear()
+        elif kind == "additional_tools":                     # declarations for this turn; request_tools merges them
+            continue
         elif kind == "item_reference":
             raise ResponsesError("item references need stored responses, and this server keeps none: send the items "
                                  "themselves", param, "unsupported_parameter")
@@ -237,13 +245,16 @@ def request_tools(req: dict):
     given = req.get("tools") or []
     if not isinstance(given, list):
         raise ResponsesError("tools must be an array", "tools")
+    # Codex declares the tools of a turn in an `additional_tools` input item: they join the request's tools
+    given = [*given, *(t for it in req.get("input") or [] if isinstance(it, dict)
+                        and it.get("type") == "additional_tools" for t in it.get("tools") or [])]
 
     def add(tool, param, namespace=None, ns_description=""):
         kind = tool.get("type")
         name = tool.get("name")
         if not isinstance(name, str) or not name:
             raise ResponsesError("a tool needs a name", param + ".name")
-        flat = f"{namespace}.{name}" if namespace else name
+        flat = flat_name(namespace, name)
         description = tool.get("description") or ""
         if ns_description:
             description = ns_description + ("\n\n" + description if description else "")

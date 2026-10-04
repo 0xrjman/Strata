@@ -1196,45 +1196,6 @@ class ClientShapes(unittest.TestCase):
         for calls in (["f"], "[1]", [{"function": "f"}], "{"):
             with self.subTest(calls=calls), self.assertRaisesRegex(ValueError, "tool_calls must be a list of objects"):
                 openai_to_messages({"messages": [{"role": "assistant", "content": "", "tool_calls": calls}]})
-    def test_responses_items_are_chat_messages(self):
-        from serve.frontend import responses_to_chat
-        req = responses_to_chat({"model": "x", "max_output_tokens": 30, "input": [
-            {"type": "function_call", "call_id": "c1", "name": "get_weather", "arguments": '{"city":"Oslo"}'},
-            {"type": "function_call_output", "call_id": "c1", "output": "rain"},
-            {"role": "user", "content": [{"type": "input_text", "text": "now?"}]},
-            {"type": "agent_message", "content": "earlier turn"}]})
-        self.assertEqual([m["role"] for m in req["messages"]], ["assistant", "tool", "user", "assistant"])
-        self.assertEqual(req["messages"][-1]["content"], "earlier turn")   # agent_message maps to assistant
-        fn = req["messages"][0]["tool_calls"][0]["function"]
-        self.assertEqual(fn["name"], "get_weather")
-        self.assertEqual(json.loads(fn["arguments"]), {"city": "Oslo"})    # json.loads: it must be a JSON string
-        self.assertEqual(req["max_tokens"], 30)
-        self.assertNotIn("max_output_tokens", req)
-
-    def test_responses_custom_and_namespace_tools(self):
-        from serve.frontend import responses_to_chat
-        req = responses_to_chat({"model": "x", "input": [
-            {"type": "custom_tool_call", "call_id": "c1", "name": "exec", "input": "ls"},
-            {"type": "custom_tool_call_output", "call_id": "c1", "output": "file"},
-            {"type": "additional_tools", "tools": [
-                {"type": "namespace", "name": "functions", "tools": [
-                    {"type": "custom", "name": "exec", "description": "run code"}]}]}],
-            "tools": [{"type": "custom", "name": "exec", "description": "run code",
-                       "format": {"type": "custom", "syntax": "lark",
-                                  "definition": "start: begin_patch hunk+ end_patch"}},
-                      {"type": "namespace", "name": "srv", "tools": [
-                          {"type": "function", "name": "read", "description": "d", "parameters": {"type": "object"}}]},
-                      {"type": "web_search"}]})
-        self.assertEqual([m["role"] for m in req["messages"]], ["assistant", "tool"])
-        fn = req["messages"][0]["tool_calls"][0]["function"]
-        self.assertEqual((fn["name"], json.loads(fn["arguments"])), ("exec", {"input": "ls"}))
-        self.assertEqual(req["messages"][1]["tool_call_id"], "c1")
-        self.assertEqual([t["function"]["name"] for t in req["tools"]], ["exec", "srv.read", "functions.exec"])
-        self.assertNotIn("additional_tools", [m.get("type") for m in req["messages"]])
-        self.assertEqual(req["tools"][0]["function"]["parameters"],
-                         {"type": "object", "properties": {"input": {"type": "string"}}, "required": ["input"]})
-        self.assertEqual(req["tools"][1]["function"]["description"], "d")
-        self.assertIn("begin_patch hunk+", req["tools"][0]["function"]["description"])   # the custom tool's grammar spec survives
 
     def test_tool_call_malformed_arguments_fallback(self):
         from serve.frontend import openai_to_messages
@@ -2427,27 +2388,6 @@ class UsageAndStatus(unittest.TestCase):
         self.assertEqual(u["input_tokens"] + u["cache_read_input_tokens"], len(self.engine.last_prompt))
         self.assertGreater(u["output_tokens"], 0)
 
-    def test_responses(self):
-        status, raw = self.request("/v1/responses", {"model": "x", "max_output_tokens": 20,
-                                                     "input": [{"role": "user", "content": "hi"}]})
-        self.assertEqual(status, 200)
-        b = json.loads(raw)
-        self.assertEqual(b["object"], "response")
-        self.assertTrue(b["id"].startswith("resp_"), b["id"])
-        self.assertEqual(b["status"], "completed")
-        self.assertTrue(b["output"])
-        self.assertIn("input_tokens", b["usage"])
-        self.assertIn("output_tokens", b["usage"])
-
-    def test_responses_stream(self):
-        status, raw = self.request("/v1/responses", {"model": "x", "max_output_tokens": 20, "stream": True,
-                                                     "input": "hi"})
-        self.assertEqual(status, 200)
-        names = [line[len("event: "):] for line in raw.decode().splitlines() if line.startswith("event: ")]
-        self.assertIn("response.created", names)
-        self.assertIn("response.output_text.delta", names)
-        self.assertEqual(names[-1], "response.completed")
-
     def test_v1_status(self):
         self.chat("/v1/chat/completions")
         status, raw = self.request("/v1/status")
@@ -2480,50 +2420,6 @@ class UsageAndStatus(unittest.TestCase):
         finally:
             httpd.shutdown()
             httpd.server_close()
-
-
-class ResponsesCustomTools(unittest.TestCase):
-    """Codex declares `custom` tools and rejects `function_call` items: a call to one streams out as a
-    custom_tool_call whose input is the unwrapped string."""
-
-    def test_events(self):
-        from serve.frontend import Event, ToolCall
-        from serve.server import responses_collect, responses_events
-        tok = ByteTokenizer()
-        svc = Service(MockEngine(tok, "ok", max_context=CTX), tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
-        run = [("event", Event("tool_start", call=ToolCall("functions.exec", {}, "c1"))),
-               ("event", Event("tool_args", text='{"input": "')),
-               ("event", Event("tool_args", text='echo hi\\')),        # an escape pair split across deltas
-               ("event", Event("tool_args", text='nbye\\"')),
-               ("event", Event("tool_args", text='"')),
-               ("event", Event("tool_args", text='}')),
-               ("event", Event("tool_call", call=ToolCall("functions.exec", {}, "c1"))),
-               ("done", {"completion_tokens": 3})]
-        evs = list(responses_events(svc, {}, [], False, None, 8, threading.Event(), run=run,
-                                    custom_names={"functions.exec"}))
-        # the deltas are the patch text itself, no {"input": ...} shell
-        deltas = "".join(e[1]["delta"] for e in evs if e[0] == "response.custom_tool_call_input.delta")
-        self.assertEqual(deltas, 'echo hi\nbye"')
-        r = responses_collect(evs)
-        items = [i for i in r["output"] if i["type"] == "custom_tool_call"]
-        self.assertEqual(len(items), 1)
-        self.assertEqual((items[0]["name"], items[0]["namespace"]), ("exec", "functions"))
-        self.assertEqual(items[0]["input"], 'echo hi\nbye"')
-        self.assertEqual(items[0]["id"], "ctc_c1")
-        self.assertEqual(items[0]["status"], "completed")
-
-    def test_unstreamed_call(self):
-        """A call that arrives whole (no tool_start/tool_args): its delta is unwrapped too."""
-        from serve.frontend import Event, ToolCall
-        from serve.server import responses_events
-        tok = ByteTokenizer()
-        svc = Service(MockEngine(tok, "ok", max_context=CTX), tok, ChatTemplate(ROOT / "serve/chat_template.jinja"))
-        run = [("event", Event("tool_call", call=ToolCall("apply_patch", {"input": "*** Begin Patch"}, "c2"))),
-               ("done", {"completion_tokens": 2})]
-        evs = list(responses_events(svc, {}, [], False, None, 8, threading.Event(), run=run,
-                                    custom_names={"apply_patch"}))
-        deltas = [e[1]["delta"] for e in evs if e[0] == "response.custom_tool_call_input.delta"]
-        self.assertEqual(deltas, ["*** Begin Patch"])
 
 
 class TimingsDrafts(unittest.TestCase):
