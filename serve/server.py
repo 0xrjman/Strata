@@ -214,6 +214,7 @@ CTX_SLACK = 8               # `strata --serve` rejects prompt + max_new + 8 > co
 # token (the Monitor showed five-digit numbers) and then undershoots for the first second of every answer.
 RATE_WINDOW_S = 2.0
 RATE_MIN_SPAN_S = 0.25      # younger than this there is no rate yet: the mean so far, with the span floored here
+REQUEST_LOG_MAX = 20000     # kept request records, in memory and in requests.jsonl (GET /metrics?requests=all)
 # #481: a running request whose engine prints nothing (no T, PP or any other line) for this long has lost step with the
 # server (the engine's main thread waits, untimed, for its next command): the engine is ended and the request fails;
 # the next request starts it again.  The config's "engine_silence_s" sets it (0: wait forever, as before).
@@ -2769,7 +2770,10 @@ class Service:
         self.api_monitor = False
         self.api_requests = collections.deque(maxlen=100)  # bounded I/O in memory; no headers or API keys
         self.request_trace = threading.local()
-        self.history = collections.deque(maxlen=500)    # the last finished requests, newest last (GET /metrics)
+        self.history = collections.deque(maxlen=REQUEST_LOG_MAX)   # finished requests, newest last (GET /metrics)
+        self.requests_log = None                        # requests.jsonl: history across restarts; None = memory only
+        self._requests_log_fh = None                    # open once, appended per request
+        self._requests_log_n = 0
         # since the server started (the Monitor's totals, issue #35)
         self.totals = {"since": time.time(), "requests": 0, "prompt_tokens": 0, "reused": 0, "output_tokens": 0,
                        "prompt_ms": 0.0, "decode_ms": 0.0,
@@ -3206,6 +3210,40 @@ class Service:
                      if k not in ("input", "output", "reasoning", "response") and not k.startswith("_")}
                     | {"wallclock_s": r.get("wallclock_s", round(time.perf_counter() - r["_clock"], 3))}
                     for r in reversed(records)]
+
+    def open_request_log(self, path):
+        """The record store that survives restarts: load requests.jsonl into history, append to it from here on."""
+        try:
+            rows = []
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8", errors="replace") as f:
+                    rows = [json.loads(line) for line in f if line.strip()]
+            self.history.extendleft(reversed(rows[-REQUEST_LOG_MAX:]))
+            self._requests_log_fh = open(path, "a", encoding="utf-8")
+            self.requests_log = str(path)
+            self._requests_log_n = len(self.history)
+        except (OSError, ValueError) as e:              # a read-only data dir must not stop the server
+            self._requests_log_fh = None
+            print(f"[strata] requests log {path}: {e}", file=sys.stderr)
+
+    def _log_request(self, rec):
+        """Append this record to requests.jsonl; a write failure stops the log with one line, never the request."""
+        if self._requests_log_fh is None:
+            return
+        self._requests_log_n += 1
+        try:
+            if self._requests_log_n >= REQUEST_LOG_MAX:   # ponytail: rewrite at the cap; rotate if this ever hurts
+                keep = list(self.history)[-REQUEST_LOG_MAX // 2:]
+                with open(self.requests_log, "w", encoding="utf-8") as f:
+                    for r in keep:
+                        f.write(json.dumps(r, ensure_ascii=False) + "\n")
+                self._requests_log_fh = open(self.requests_log, "a", encoding="utf-8")
+                self._requests_log_n = len(keep)
+            self._requests_log_fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            self._requests_log_fh.flush()
+        except OSError as e:
+            self._requests_log_fh = None
+            print(f"[strata] requests log write stopped: {e}", file=sys.stderr)
 
     def metrics(self, all_requests=False) -> dict:
         """GET /metrics: what the Monitor tab shows - the engine's facts, what it is doing, the last requests, and
@@ -3964,6 +4002,7 @@ class Service:
                                 # #457: the speculative drafts from the DONE line (None: the engine did not say)
                                 "drafts_offered": last.get("drafts_offered"),
                                 "drafts_accepted": last.get("drafts_accepted")})
+                            self._log_request(self.history[-1])
                             t = self.totals
                             t["requests"] += 1
                             t["prompt_tokens"] += seen
@@ -6259,6 +6298,7 @@ def main() -> int:
     svc.backend = cfg.get("backend")                    # "hip": the AMD cards' readings come from sysfs (#301)
     if a.config:
         svc.config_path = a.config                      # #564: the web page's Settings view
+        svc.open_request_log(str(Path(a.config).with_suffix("")) + ".requests.jsonl")
     if a.config:                                        # the Chat settings shared with other apps, from last time
         svc.shared_path = str(Path(a.config).with_suffix("")) + ".shared-settings.json"
         try:
