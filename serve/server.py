@@ -1028,7 +1028,8 @@ class StrataEngine:
             with self.wlock:
                 self.proc.stdin.write(text + "\n")
                 self.proc.stdin.flush()
-        except (OSError, AttributeError):                # the pipe is gone (or a restart's close() took the process):
+        except (OSError, AttributeError, ValueError):    # the pipe is gone (closed in-process -> ValueError),
+                                                         # or a restart's close() took the process:
             raise EngineDied(f"the engine stopped unexpectedly (exit code {self.exit_code()})") from None
 
     def _control(self, cancel, on_token, stop_when=None):
@@ -1658,7 +1659,7 @@ class StrataEngine:
                     try:
                         self.proc.stdin.write("STOP\n")
                         self.proc.stdin.flush()
-                    except OSError:
+                    except (OSError, ValueError):
                         pass
                 # #481: never an untimed wait here - it holds the request FIFO, and an engine that lost step never
                 # answers.  An engine that honours STOP gets the current allowance in all (a STOP during a prompt
