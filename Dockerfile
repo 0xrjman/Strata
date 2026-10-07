@@ -60,12 +60,20 @@ ARG PIP_INDEX_URL=https://mirrors.ustc.edu.cn/pypi/web/simple
 RUN python3 -m venv .venv \
     && .venv/bin/pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" --timeout 60 --retries 10 --upgrade pip \
     && .venv/bin/pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" --timeout 60 --retries 10 -r requirements.txt
-COPY . .
-RUN chmod +x setup.sh docker-entrypoint.sh
+# only what the compile step below reads: a serve/*.py edit then reuses the compiled engine.
+# (each dir copies to its own path: a multi-dir COPY to ./ would flatten their contents)
+COPY setup.py CMakeLists.txt ./
+COPY src src
+COPY include include
+COPY cmake cmake
+# CMakeLists has unconditional targets under tests/ and bench/micro/, so configure needs them present.
+COPY tests tests
+COPY bench bench
+COPY tools/vision tools/vision
+COPY third_party/ggml third_party/ggml
 
-# RTX 20 (75), RTX 30 (86), RTX 40 (89), RTX 50 (120), plus 80 for A-series. CMakeLists
-# refuses anything below 75. BUILD_VISION=0 skips the image encoder build.
-ARG CUDA_ARCHITECTURES=75;80;86;89;120
+# RTX 50 (120) is this box's card; pass CUDA_ARCHITECTURES=75;80;86;89;120 for a wider image.
+ARG CUDA_ARCHITECTURES=120
 ARG BUILD_VISION=1
 
 # llama.cpp at the pinned commit, then the engine and the image encoder, built
@@ -107,6 +115,10 @@ PYEOF
 
 # the cmake trees are build-time only; the engine itself is what the container needs
 RUN rm -rf build build-vision
+
+# the rest of the tree (serve/, data/, docs/, scripts) lands after the compile layer
+COPY . .
+RUN chmod +x setup.sh docker-entrypoint.sh
 
 VOLUME ["/data"]
 EXPOSE 8080
