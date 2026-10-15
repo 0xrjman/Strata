@@ -241,3 +241,14 @@ parts and every model have their own licenses ([which ones](docs/HOW_IT_WORKS.md
 Strata is free and open source. If it is useful to you, you can support its development:
 
 <p align="center"><a href="https://buymeacoffee.com/strataengine"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" height="50"></a></p>
+
+## Keeping this fork in sync
+
+History here is **append-only**: upstream lands as merge commits, never rewritten and never force-pushed.
+
+| What | How |
+|---|---|
+| Catch up | `git fetch && git merge origin/main` (a plain `git pull`) — no rebase, no `reset --hard` |
+| Daily sync | merges `upstream/main` with `-X theirs`: upstream's implementation wins a conflict |
+| Fork-only changes | closed-stdin STOP guard, Responses API seam at `/v1/responses`, park `drop_superseded` guard, split source `COPY` in the Dockerfile |
+| Backups | tags named `sync-backup/YYYY-MM-DD` and `upstream-YYYYMMDD` |
