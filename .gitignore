@@ -24,6 +24,7 @@ __pycache__/
 *.npz
 *.occ1
 td.log
+FORK.md
 
 # created by setup.py on the user's machine
 /.venv/

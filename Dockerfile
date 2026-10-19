@@ -21,15 +21,25 @@ ARG RUNTIME_BASE=ubuntu:24.04
 # ---- 1. compile the engine and make its component package
 FROM ${CUDA_IMAGE} AS engine-build
 ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1 PATH=/venv/bin:$PATH
+# USTC mirrors: the default Ubuntu/PyPI endpoints are slow from this box.
+RUN sed -i 's|http://archive.ubuntu.com/ubuntu|https://mirrors.ustc.edu.cn/ubuntu|g; s|http://security.ubuntu.com/ubuntu|https://mirrors.ustc.edu.cn/ubuntu|g' /etc/apt/sources.list.d/*.sources 2>/dev/null || true
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential ca-certificates git libgomp1 libatomic1 python3 python3-pip python3-venv unzip \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
-COPY . .
+ARG PIP_INDEX_URL=https://mirrors.ustc.edu.cn/pypi/web/simple
+COPY requirements.txt requirements-build.txt ./
+RUN python3 -m venv /venv && /venv/bin/pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" --timeout 60 --retries 10 -r requirements.txt -r requirements-build.txt
+# only what the compile/packaging steps below read (tests/ bench/ are gated off by STRATA_BUILD_TESTS=OFF)
+COPY setup.py CMakeLists.txt ./
+COPY src src
+COPY include include
+COPY cmake cmake
+COPY tools/vision tools/vision
+COPY packaging packaging
 ARG CUDA_ARCHITECTURES="75;80;86;89;120"
 ARG BUILD_VISION=1
 ARG ENGINE_VERSION=
-RUN python3 -m venv /venv && /venv/bin/pip install --no-cache-dir -r requirements.txt -r requirements-build.txt
 # llama.cpp at the pinned commit (ggml for the engine, mtmd for pictures), exactly as setup.py fetches it
 RUN /venv/bin/python -c "import setup; print(setup.get_llama_cpp())"
 RUN set -e; \
@@ -62,6 +72,7 @@ RUN set -e; \
 # ---- 2. the Terminal (the release archive, built here)
 FROM ${RUNTIME_BASE} AS terminal
 ENV DEBIAN_FRONTEND=noninteractive
+RUN sed -i 's|http://archive.ubuntu.com/ubuntu|https://mirrors.ustc.edu.cn/ubuntu|g; s|http://security.ubuntu.com/ubuntu|https://mirrors.ustc.edu.cn/ubuntu|g' /etc/apt/sources.list.d/*.sources 2>/dev/null || true
 RUN apt-get update && apt-get install -y --no-install-recommends python3 ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY . /src/
 RUN python3 /src/packaging/package_terminal.py --out /out --cache /cache \
@@ -83,6 +94,7 @@ RUN cd /opt/strata/terminal && STRATA_CONTROL_INSTALL=1 STRATA_INSTALL_DIR=/opt/
 FROM ${RUNTIME_BASE}
 ARG STRATA_VERSION=dev
 ENV DEBIAN_FRONTEND=noninteractive
+RUN sed -i 's|http://archive.ubuntu.com/ubuntu|https://mirrors.ustc.edu.cn/ubuntu|g; s|http://security.ubuntu.com/ubuntu|https://mirrors.ustc.edu.cn/ubuntu|g' /etc/apt/sources.list.d/*.sources 2>/dev/null || true
 RUN apt-get update && apt-get install -y --no-install-recommends tini ca-certificates libgomp1 libatomic1 libnuma1 zlib1g \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/*
 COPY --from=terminal /opt/strata/terminal /opt/strata/terminal
