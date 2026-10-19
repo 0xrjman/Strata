@@ -80,6 +80,8 @@ RUN apt-get -o Acquire::http::Proxy=direct -o Acquire::https::Proxy=direct updat
  && apt-get -o Acquire::http::Proxy=direct -o Acquire::https::Proxy=direct install -y --no-install-recommends python3 ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY . /src/
 RUN printf '[global]\nindex-url = https://mirrors.ustc.edu.cn/pypi/web/simple\n' > /etc/pip.conf
+# host-side pre-download (proxy): this box cannot fetch the 67 MB asset reliably in-build, so seed the cache package_terminal.py reads
+COPY packaging/cache/cpython-3.12.15_20261009-x86_64-unknown-linux-gnu-install_only.tar.gz /cache/cpython-3.12.15_20261009-x86_64-unknown-linux-gnu-install_only.tar.gz
 RUN python3 /src/packaging/package_terminal.py --out /out --cache /cache \
  && mkdir -p /opt/strata \
  && tar -xzf /out/strata-terminal-*-linux-x86_64.tar.gz -C /opt/strata \
