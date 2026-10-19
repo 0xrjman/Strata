@@ -390,6 +390,7 @@ public:
             for (const auto& c : e.checkpoints)
                 if (!deepest || c.ids.size() > deepest->ids.size()) deepest = &c;
             if (e.cvec == cvec && deepest && !deepest->ids.empty() && held(*deepest) &&
+                e.live.ids.size() <= out_max &&               // live deeper than anything the chain holds is a branch, not a stale copy
                 !(guarded_ != 0 && serials_[i] == guarded_)) {
                 bytes_ -= e.bytes();
                 erase(i);
@@ -408,6 +409,8 @@ public:
     /// prefix, and the conversation only appends, so the copy stays usable for the reuse it was made for.
     size_t parked_prefix_tokens(const std::vector<int32_t>& ids, const std::vector<ConversationImageKey>& images,
                                 const std::vector<ConversationCheckpoint>& checkpoints, bool cvec) const {
+        size_t out_max = ids.size();
+        for (const auto& k : checkpoints) out_max = std::max(out_max, k.ids.size());
         size_t longest = 0;
         for (const auto& e : entries_) {
             if (e.cvec != cvec) continue;
@@ -418,7 +421,7 @@ public:
             bool holds = deepest->ids == ids && deepest->imgs == images;
             for (const auto& k : checkpoints)
                 if (!holds && k.ids == deepest->ids && k.imgs == deepest->imgs) holds = true;
-            if (holds) longest = std::max(longest, deepest->ids.size());
+            if (holds && e.live.ids.size() <= out_max) longest = std::max(longest, deepest->ids.size());
         }
         return longest;
     }
