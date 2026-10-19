@@ -79,6 +79,7 @@ RUN sed -i 's|http://archive.ubuntu.com/ubuntu|http://mirrors.ustc.edu.cn/ubuntu
 RUN apt-get -o Acquire::http::Proxy=direct -o Acquire::https::Proxy=direct update \
  && apt-get -o Acquire::http::Proxy=direct -o Acquire::https::Proxy=direct install -y --no-install-recommends python3 ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY . /src/
+RUN printf '[global]\nindex-url = https://mirrors.ustc.edu.cn/pypi/web/simple\n' > /etc/pip.conf
 RUN python3 /src/packaging/package_terminal.py --out /out --cache /cache \
  && mkdir -p /opt/strata \
  && tar -xzf /out/strata-terminal-*-linux-x86_64.tar.gz -C /opt/strata \

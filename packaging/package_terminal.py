@@ -198,8 +198,7 @@ def install_locked(py: Path, lock: Path, root: Path, wheelhouse: Path | None = N
     still checks every hash against the lock."""
     env = {**os.environ, "PIP_NO_INPUT": "1", "PIP_DISABLE_PIP_VERSION_CHECK": "1", "PYTHONNOUSERSITE": "1",
            "PIP_CONFIG_FILE": os.devnull}
-    # PIP_INDEX_URL survives on purpose: --require-hashes checks every wheel, so a PyPI mirror is safe.
-    for name in ("PYTHONHOME", "PYTHONPATH", "PIP_REQUIRE_VIRTUALENV", "PIP_EXTRA_INDEX_URL"):
+    for name in ("PYTHONHOME", "PYTHONPATH", "PIP_REQUIRE_VIRTUALENV", "PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL"):
         env.pop(name, None)
     source = ["--no-index", "--find-links", str(wheelhouse)] if wheelhouse else []
     subprocess.run([str(py), "-m", "pip", "install", "--isolated", "--no-cache-dir", "--no-warn-script-location",
