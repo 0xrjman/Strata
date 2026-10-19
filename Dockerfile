@@ -32,14 +32,8 @@ WORKDIR /src
 ARG PIP_INDEX_URL=https://mirrors.ustc.edu.cn/pypi/web/simple
 COPY requirements.txt requirements-build.txt ./
 RUN python3 -m venv /venv && /venv/bin/pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" --timeout 60 --retries 10 -r requirements.txt -r requirements-build.txt
-# only what the compile/packaging steps below read (tests/ bench/ are gated off by STRATA_BUILD_TESTS=OFF)
-COPY setup.py CMakeLists.txt ./
-COPY src src
-COPY include include
-COPY cmake cmake
-COPY strata_control strata_control
-COPY tools/vision tools/vision
-COPY packaging packaging
+# full tree: cmake/ggml-tq_overlay.cmake reads third_party/, which an enumerated COPY would drop
+COPY . .
 ARG CUDA_ARCHITECTURES="75;80;86;89;120"
 ARG BUILD_VISION=1
 ARG ENGINE_VERSION=
