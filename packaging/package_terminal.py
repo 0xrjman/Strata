@@ -146,9 +146,22 @@ def fetch_python(target: str, cache: Path) -> Path:
     pin = PYTHON_PINS[target]
     archive = cache / pin["file"].replace("+", "_")
     if not archive.exists():
-        print(f"fetching the pinned CPython from {pin['url']}")
         part = archive.with_suffix(archive.suffix + ".part")
-        urllib.request.urlretrieve(pin["url"], part)
+        # PBS_MIRROR is a github-release mirror prefix ending at the release dir (those mirrors drop "releases/download");
+        # the pinned GitHub URL stays as fallback. The digest check below rejects any truncated copy.
+        mirror = os.environ.get("PBS_MIRROR")
+        urls = ([mirror.rstrip("/") + "/" + pin["file"].replace("+", "%2B")] if mirror else []) + [pin["url"]]
+        for url in urls:
+            print(f"fetching the pinned CPython from {url}")
+            part.unlink(missing_ok=True)
+            try:
+                urllib.request.urlretrieve(url, part)
+            except Exception as exc:
+                print(f"  {url} failed: {exc}")
+                continue
+            break
+        else:
+            raise SystemExit(f"no source could fetch the pinned CPython {pin['file']}")
         part.replace(archive)
     got = sha256(archive)
     if got != pin["sha256"]:
@@ -185,7 +198,8 @@ def install_locked(py: Path, lock: Path, root: Path, wheelhouse: Path | None = N
     still checks every hash against the lock."""
     env = {**os.environ, "PIP_NO_INPUT": "1", "PIP_DISABLE_PIP_VERSION_CHECK": "1", "PYTHONNOUSERSITE": "1",
            "PIP_CONFIG_FILE": os.devnull}
-    for name in ("PYTHONHOME", "PYTHONPATH", "PIP_REQUIRE_VIRTUALENV", "PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL"):
+    # PIP_INDEX_URL survives on purpose: --require-hashes checks every wheel, so a PyPI mirror is safe.
+    for name in ("PYTHONHOME", "PYTHONPATH", "PIP_REQUIRE_VIRTUALENV", "PIP_EXTRA_INDEX_URL"):
         env.pop(name, None)
     source = ["--no-index", "--find-links", str(wheelhouse)] if wheelhouse else []
     subprocess.run([str(py), "-m", "pip", "install", "--isolated", "--no-cache-dir", "--no-warn-script-location",

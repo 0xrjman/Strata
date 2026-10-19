@@ -69,8 +69,11 @@ RUN set -e; \
 # ---- 2. the Terminal (the release archive, built here)
 FROM ${RUNTIME_BASE} AS terminal
 ENV DEBIAN_FRONTEND=noninteractive
-# this stage fetches python-build-standalone from GitHub: use the local proxy; clear no_proxy so it applies to 127.0.0.1 too
-ENV http_proxy=http://127.0.0.1:7890 https_proxy=http://127.0.0.1:7890 HTTP_PROXY=http://127.0.0.1:7890 HTTPS_PROXY=http://127.0.0.1:7890 no_proxy=
+# the pinned CPython comes from a domestic github-release mirror (GitHub through the local proxy truncates mid-download);
+# PBS_MIRROR is tried first and package_terminal.py falls back to the GitHub URL, so this stage goes direct
+ENV http_proxy= https_proxy= HTTP_PROXY= HTTPS_PROXY= no_proxy=* \
+    PBS_MIRROR=https://mirrors.ustc.edu.cn/github-release/astral-sh/python-build-standalone/20261009 \
+    PIP_INDEX_URL=https://mirrors.ustc.edu.cn/pypi/web/simple
 RUN sed -i 's|http://archive.ubuntu.com/ubuntu|http://mirrors.ustc.edu.cn/ubuntu|g; s|http://security.ubuntu.com/ubuntu|http://mirrors.ustc.edu.cn/ubuntu|g' /etc/apt/sources.list.d/*.sources 2>/dev/null || true
 # apt over http to USTC cannot go through the proxy (probe: "Unable to connect to 127.0.0.1:7890" from a bridge-network build container), so force it direct
 RUN apt-get -o Acquire::http::Proxy=direct -o Acquire::https::Proxy=direct update \
