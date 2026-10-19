@@ -21,6 +21,8 @@ ARG RUNTIME_BASE=ubuntu:24.04
 # ---- 1. compile the engine and make its component package
 FROM ${CUDA_IMAGE} AS engine-build
 ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1 PATH=/venv/bin:$PATH
+# the daemon's systemd drop-in injects HTTP(S)_PROXY=127.0.0.1:7890 into build containers; clear it so apt/pip go direct
+ENV http_proxy= https_proxy= HTTP_PROXY= HTTPS_PROXY= no_proxy=*
 # USTC mirrors: the default Ubuntu/PyPI endpoints are slow from this box.
 RUN sed -i 's|http://archive.ubuntu.com/ubuntu|https://mirrors.ustc.edu.cn/ubuntu|g; s|http://security.ubuntu.com/ubuntu|https://mirrors.ustc.edu.cn/ubuntu|g' /etc/apt/sources.list.d/*.sources 2>/dev/null || true
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -72,6 +74,7 @@ RUN set -e; \
 # ---- 2. the Terminal (the release archive, built here)
 FROM ${RUNTIME_BASE} AS terminal
 ENV DEBIAN_FRONTEND=noninteractive
+ENV http_proxy= https_proxy= HTTP_PROXY= HTTPS_PROXY= no_proxy=*
 RUN sed -i 's|http://archive.ubuntu.com/ubuntu|https://mirrors.ustc.edu.cn/ubuntu|g; s|http://security.ubuntu.com/ubuntu|https://mirrors.ustc.edu.cn/ubuntu|g' /etc/apt/sources.list.d/*.sources 2>/dev/null || true
 RUN apt-get update && apt-get install -y --no-install-recommends python3 ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY . /src/
@@ -94,6 +97,7 @@ RUN cd /opt/strata/terminal && STRATA_CONTROL_INSTALL=1 STRATA_INSTALL_DIR=/opt/
 FROM ${RUNTIME_BASE}
 ARG STRATA_VERSION=dev
 ENV DEBIAN_FRONTEND=noninteractive
+ENV http_proxy= https_proxy= HTTP_PROXY= HTTPS_PROXY= no_proxy=*
 RUN sed -i 's|http://archive.ubuntu.com/ubuntu|https://mirrors.ustc.edu.cn/ubuntu|g; s|http://security.ubuntu.com/ubuntu|https://mirrors.ustc.edu.cn/ubuntu|g' /etc/apt/sources.list.d/*.sources 2>/dev/null || true
 RUN apt-get update && apt-get install -y --no-install-recommends tini ca-certificates libgomp1 libatomic1 libnuma1 zlib1g \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/*
