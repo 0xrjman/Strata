@@ -75,7 +75,7 @@ RUN set -e; \
 FROM ${RUNTIME_BASE} AS terminal
 ENV DEBIAN_FRONTEND=noninteractive
 ENV http_proxy= https_proxy= HTTP_PROXY= HTTPS_PROXY= no_proxy=*
-RUN sed -i 's|http://archive.ubuntu.com/ubuntu|https://mirrors.ustc.edu.cn/ubuntu|g; s|http://security.ubuntu.com/ubuntu|https://mirrors.ustc.edu.cn/ubuntu|g' /etc/apt/sources.list.d/*.sources 2>/dev/null || true
+RUN sed -i 's|http://archive.ubuntu.com/ubuntu|http://mirrors.ustc.edu.cn/ubuntu|g; s|http://security.ubuntu.com/ubuntu|http://mirrors.ustc.edu.cn/ubuntu|g' /etc/apt/sources.list.d/*.sources 2>/dev/null || true
 RUN apt-get update && apt-get install -y --no-install-recommends python3 ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY . /src/
 RUN python3 /src/packaging/package_terminal.py --out /out --cache /cache \
@@ -98,7 +98,7 @@ FROM ${RUNTIME_BASE}
 ARG STRATA_VERSION=dev
 ENV DEBIAN_FRONTEND=noninteractive
 ENV http_proxy= https_proxy= HTTP_PROXY= HTTPS_PROXY= no_proxy=*
-RUN sed -i 's|http://archive.ubuntu.com/ubuntu|https://mirrors.ustc.edu.cn/ubuntu|g; s|http://security.ubuntu.com/ubuntu|https://mirrors.ustc.edu.cn/ubuntu|g' /etc/apt/sources.list.d/*.sources 2>/dev/null || true
+RUN sed -i 's|http://archive.ubuntu.com/ubuntu|http://mirrors.ustc.edu.cn/ubuntu|g; s|http://security.ubuntu.com/ubuntu|http://mirrors.ustc.edu.cn/ubuntu|g' /etc/apt/sources.list.d/*.sources 2>/dev/null || true
 RUN apt-get update && apt-get install -y --no-install-recommends tini ca-certificates libgomp1 libatomic1 libnuma1 zlib1g \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/*
 COPY --from=terminal /opt/strata/terminal /opt/strata/terminal
