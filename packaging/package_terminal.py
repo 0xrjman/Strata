@@ -196,12 +196,11 @@ def install_locked(py: Path, lock: Path, root: Path, wheelhouse: Path | None = N
     """pip install --require-hashes into the bundled interpreter, then check what is there is exactly the lock.
     With a wheelhouse (lock_wheels.py --download) nothing is fetched at all: pip reads the wheels from the folder and
     still checks every hash against the lock."""
-    env = {**os.environ, "PIP_NO_INPUT": "1", "PIP_DISABLE_PIP_VERSION_CHECK": "1", "PYTHONNOUSERSITE": "1",
-           "PIP_CONFIG_FILE": os.devnull}
-    for name in ("PYTHONHOME", "PYTHONPATH", "PIP_REQUIRE_VIRTUALENV", "PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL"):
+    env = {**os.environ, "PIP_NO_INPUT": "1", "PIP_DISABLE_PIP_VERSION_CHECK": "1", "PYTHONNOUSERSITE": "1"}
+    for name in ("PYTHONHOME", "PYTHONPATH", "PIP_REQUIRE_VIRTUALENV", "PIP_EXTRA_INDEX_URL"):
         env.pop(name, None)
     source = ["--no-index", "--find-links", str(wheelhouse)] if wheelhouse else []
-    subprocess.run([str(py), "-m", "pip", "install", "--isolated", "--no-cache-dir", "--no-warn-script-location",
+    subprocess.run([str(py), "-m", "pip", "install", "--no-cache-dir", "--no-warn-script-location",
                     "--require-hashes", "--no-deps", "--only-binary=:all:", *source, "-r", str(lock)],
                    check=True, cwd=str(root), env=env)
     subprocess.run([str(py), "-m", "pip", "check"], check=True, cwd=str(root), env=env)
