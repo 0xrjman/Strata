@@ -37,6 +37,7 @@ COPY setup.py CMakeLists.txt ./
 COPY src src
 COPY include include
 COPY cmake cmake
+COPY strata_control strata_control
 COPY tools/vision tools/vision
 COPY packaging packaging
 ARG CUDA_ARCHITECTURES="75;80;86;89;120"
