@@ -5,6 +5,8 @@
 #
 #   docker build -t strata:src .                                        # RTX 20/30/40/50 (compiles for each, ~25 min)
 #   docker build -t strata:src --build-arg CUDA_ARCHITECTURES=86 .      # one card only (faster); 86 = RTX 30, 89 = RTX 40, 120 = RTX 50
+#   docker build -t strata:src-cuda12 --build-arg CUDA_IMAGE=nvidia/cuda:12.9.1-devel-ubuntu24.04 \
+#              --build-arg CUDA_ARCHITECTURES="60;61;70;75;80;86;89" --build-arg BUILD_VISION=0 .   # GTX 10 / P100 / V100 (driver 575+)
 #   docker run --rm --gpus all -p 127.0.0.1:8080:8080 --ulimit memlock=-1 --shm-size 2g --stop-timeout 120 \
 #              -v strata-data:/data -e MODEL=IQ3_XXS -e API_KEY=change-me-please-123 strata:src
 #
@@ -42,7 +44,9 @@ RUN /venv/bin/python -c "import setup; print(setup.get_llama_cpp())"
 RUN set -e; \
     real=""; for a in $(echo "$CUDA_ARCHITECTURES" | tr ';,' '  '); do real="$real;${a}-real"; done; real=${real#;}; \
     last=$(echo "$CUDA_ARCHITECTURES" | tr ';,' '  ' | awk '{print $NF}'); \
+    sm60=OFF; for a in $(echo "$CUDA_ARCHITECTURES" | tr ';,' '  '); do if [ "$a" -lt 75 ]; then sm60=ON; fi; done; \
     /venv/bin/cmake -G Ninja -S . -B build -DCMAKE_BUILD_TYPE=Release -DSTRATA_ENABLE_CUDA=ON -DSTRATA_BUILD_TESTS=OFF \
+        -DSTRATA_EXPERIMENTAL_SM60=$sm60 \
         -DSTRATA_NATIVE_EXPERTS=ON -DSTRATA_PORTABLE=ON -DSTRATA_Q6K_EXPERTS=ON -DSTRATA_MMQ_KQUANTS=ON \
         "-DCMAKE_CUDA_ARCHITECTURES=${real};${last}-virtual" -DSTRATA_GGML_DIR=/src/third_party/llama.cpp; \
     /venv/bin/cmake --build build --target strata strata_kq -j "$(nproc)"; \
@@ -57,27 +61,21 @@ RUN set -e; \
     [ -f build/libstrata_kq.so ] && cp build/libstrata_kq.so /stage/ || true; \
     [ -f build-vision/bin/strata-vision ] && cp build-vision/bin/strata-vision /stage/ || true; \
     ver="${ENGINE_VERSION:-$(sed -n 's/^[[:space:]]*project([^)]*VERSION[[:space:]]*\([0-9][0-9.]*\).*/\1/p' CMakeLists.txt | head -1)}"; \
-    echo "{\"version\": \"$ver\", \"source\": \"docker build\", \"archs\": \"$CUDA_ARCHITECTURES\", \"cuda\": \"13.0\", \"portable\": true}" > /stage/BUILD.json; \
+    cudafull=$(nvcc --version | sed -n 's/.*release \([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p' | head -1); cudamajor=${cudafull%%.*}; \
+    if [ "$cudamajor" = 13 ]; then mindriver=580.65; else mindriver=575.51; fi; \
+    echo "{\"version\": \"$ver\", \"source\": \"docker build\", \"archs\": \"$CUDA_ARCHITECTURES\", \"cuda\": \"$cudafull\", \"portable\": true}" > /stage/BUILD.json; \
     python3 packaging/collect_libs.py --binary build/strata --search /usr/local/cuda/lib64 --out /stage --also 'libcublasLt.so*'; \
     archs=""; for a in $(echo "$CUDA_ARCHITECTURES" | tr ';,' '  '); do archs="$archs --arch sm_$a"; done; \
     last=$(echo "$CUDA_ARCHITECTURES" | tr ';,' '  ' | awk '{print $NF}'); \
     python3 packaging/package_engine.py --src /stage --backend cuda --version "$ver" --out /engine $archs --arch "compute_$last" \
-        --min-driver nvidia=580.65 --variant cuda13 --platform linux-x86_64 --build-id "docker-source-${ver}-cuda13.0" --include SYSTEM-LIBS.txt --include 'libstrata_kq*' \
+        --min-driver nvidia=$mindriver --variant cuda$cudamajor --platform linux-x86_64 --build-id "docker-source-${ver}-cuda${cudafull}" --include SYSTEM-LIBS.txt --include 'libstrata_kq*' \
         --include strata-vision; \
     for d in /engine/*/; do python3 packaging/package_engine.py --verify "$d"; python3 packaging/binary_deps.py "$d"; done
 
 # ---- 2. the Terminal (the release archive, built here)
 FROM ${RUNTIME_BASE} AS terminal
 ENV DEBIAN_FRONTEND=noninteractive
-# the pinned CPython comes from a domestic github-release mirror (GitHub through the local proxy truncates mid-download);
-# PBS_MIRROR is tried first and package_terminal.py falls back to the GitHub URL, so this stage goes direct
-ENV http_proxy= https_proxy= HTTP_PROXY= HTTPS_PROXY= no_proxy=* \
-    PBS_MIRROR=https://mirrors.ustc.edu.cn/github-release/astral-sh/python-build-standalone/20261009 \
-    PIP_INDEX_URL=https://mirrors.ustc.edu.cn/pypi/web/simple
-RUN sed -i 's|http://archive.ubuntu.com/ubuntu|http://mirrors.ustc.edu.cn/ubuntu|g; s|http://security.ubuntu.com/ubuntu|http://mirrors.ustc.edu.cn/ubuntu|g' /etc/apt/sources.list.d/*.sources 2>/dev/null || true
-# apt over http to USTC cannot go through the proxy (probe: "Unable to connect to 127.0.0.1:7890" from a bridge-network build container), so force it direct
-RUN apt-get -o Acquire::http::Proxy=direct -o Acquire::https::Proxy=direct update \
- && apt-get -o Acquire::http::Proxy=direct -o Acquire::https::Proxy=direct install -y --no-install-recommends python3 ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends python3 ca-certificates git && rm -rf /var/lib/apt/lists/*
 COPY . /src/
 # host-side pre-download (proxy): this box cannot fetch the 67 MB asset reliably in-build, so seed the cache package_terminal.py reads
 COPY packaging/cache/cpython-3.12.15_20261009-x86_64-unknown-linux-gnu-install_only.tar.gz /cache/cpython-3.12.15_20261009-x86_64-unknown-linux-gnu-install_only.tar.gz
