@@ -76,10 +76,15 @@ RUN set -e; \
 # ---- 2. the Terminal (the release archive, built here)
 FROM ${RUNTIME_BASE} AS terminal
 ENV DEBIAN_FRONTEND=noninteractive
+# the locked runtime wheels come from the domestic mirror: PyPI through the proxy is slow and drops mid-build
+ENV PIP_INDEX_URL=https://mirrors.ustc.edu.cn/pypi/web/simple PIP_RETRIES=10 PIP_TIMEOUT=60
 RUN apt-get update && apt-get install -y --no-install-recommends python3 ca-certificates git && rm -rf /var/lib/apt/lists/*
 COPY . /src/
 # host-side pre-download (proxy): this box cannot fetch the 67 MB asset reliably in-build, so seed the cache package_terminal.py reads
 COPY packaging/cache/cpython-3.12.15_20261009-x86_64-unknown-linux-gnu-install_only.tar.gz /cache/cpython-3.12.15_20261009-x86_64-unknown-linux-gnu-install_only.tar.gz
+# the sources have no .git here (and the stage has no git): the caller passes the commit, as docker/Dockerfile does
+ARG STRATA_COMMIT=
+ENV STRATA_BUILD_COMMIT=${STRATA_COMMIT}
 RUN python3 /src/packaging/package_terminal.py --out /out --cache /cache \
  && mkdir -p /opt/strata \
  && tar -xzf /out/strata-terminal-*-linux-x86_64.tar.gz -C /opt/strata \
@@ -87,6 +92,8 @@ RUN python3 /src/packaging/package_terminal.py --out /out --cache /cache \
  && /opt/strata/terminal/bin/strata --version
 # llama.cpp at the commit setup.py pins: fetched here, so the first start does not depend on GitHub. Only gguf-py (the model preparation
 # tools) and the file setup.py looks for (ggml/CMakeLists.txt) are kept: 170 MB become a few
+# seed the vendored archive + its .done mark so setup never reaches github.com (name tracks LLAMA_CPP_COMMIT[:7] in setup.py)
+COPY third_party/llama.cpp-3cf0325.zip third_party/llama.cpp-3cf0325.zip.done /opt/strata/seed/third_party/
 RUN cd /opt/strata/terminal && STRATA_CONTROL_INSTALL=1 STRATA_INSTALL_DIR=/opt/strata/seed PYTHONNOUSERSITE=1 \
       /opt/strata/terminal/python/bin/python3 -c "import setup; print(setup.get_llama_cpp())" \
  && rm -rf /opt/strata/seed/third_party/*.zip* \
