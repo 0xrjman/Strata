@@ -79,10 +79,24 @@ def _content(content, param):
                 raise ResponsesError("only images given as image_url (a data: or http(s) URL) are supported; "
                                      "this server keeps no files", f"{param}[{j}]", "unsupported_parameter")
             parts.append({"type": "input_image", "image_url": part["image_url"]})
+        elif kind == "encrypted_content":
+            text = _encrypted_text(part.get("encrypted_content"))
+            if text:
+                parts.append({"type": "text", "text": text})
         else:
             raise ResponsesError(f"content parts of type {kind!r} are not supported (text and images are)",
                                  f"{param}[{j}].type", "unsupported_parameter")
     return _parts_of(parts)
+
+
+def _encrypted_text(enc) -> str | None:
+    """Our own encrypted_content token decoded, or None for another server's token or a damaged one."""
+    if not isinstance(enc, str) or not enc.startswith(ENCRYPTED_PREFIX):
+        return None
+    try:
+        return json.loads(base64.b64decode(enc[len(ENCRYPTED_PREFIX):], validate=True).decode("utf-8"))["text"]
+    except (ValueError, KeyError, TypeError, UnicodeError):
+        return None
 
 
 def _reasoning_text(item, param) -> str:
@@ -94,11 +108,11 @@ def _reasoning_text(item, param) -> str:
         return "".join(texts)
     enc = item.get("encrypted_content")
     if isinstance(enc, str) and enc.startswith(ENCRYPTED_PREFIX):
-        try:
-            return json.loads(base64.b64decode(enc[len(ENCRYPTED_PREFIX):], validate=True).decode("utf-8"))["text"]
-        except (ValueError, KeyError, TypeError, UnicodeError):
+        text = _encrypted_text(enc)
+        if text is None:
             raise ResponsesError("this reasoning item's encrypted_content is damaged", param + ".encrypted_content",
                                  "invalid_encrypted_content") from None
+        return text
     return ""
 
 

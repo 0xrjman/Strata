@@ -897,12 +897,19 @@ class OutputParser:
         self.declared_only = declared_only
         # PR #3556: the native namespace__member spelling of a declared namespace.member tool is accepted without advertising a
         # duplicate tool.  Only an unambiguous alias counts (two namespaces can end in the same member), and an exactly declared
-        # name always wins over an alias.
+        # name always wins over an alias.  Harmony's functions. prefix is stripped the same way: a model writing
+        # functions.namespace.member reaches the declared name it spells, dotted or with double underscore.
         aliases = {}
         for name in self.schemas:
-            if isinstance(name, str) and "." in name:
+            if not isinstance(name, str):
+                continue
+            if "." in name:
                 namespace, member = name.rsplit(".", 1)
                 aliases.setdefault(f"{namespace}__{member}", set()).add(name)
+            if "__" in name:
+                namespace, member = name.rsplit("__", 1)
+                aliases.setdefault(f"functions.{namespace}.{member}", set()).add(name)
+            aliases.setdefault(f"functions.{name}", set()).add(name)
         self.aliases = {alias: next(iter(names)) for alias, names in aliases.items()
                         if len(names) == 1 and alias not in self.schemas}
         self.unread = 0              # #3441: `<tool_call>` blocks that opened like a call and were returned as text
