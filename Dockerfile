@@ -75,6 +75,8 @@ RUN set -e; \
 
 # ---- 2. the Terminal (the release archive, built here)
 FROM ${RUNTIME_BASE} AS terminal
+ARG STRATA_COMMIT=
+ENV STRATA_BUILD_COMMIT=${STRATA_COMMIT}
 ENV DEBIAN_FRONTEND=noninteractive
 # the locked runtime wheels come from the domestic mirror: PyPI through the proxy is slow and drops mid-build
 ENV PIP_INDEX_URL=https://mirrors.ustc.edu.cn/pypi/web/simple PIP_RETRIES=10 PIP_TIMEOUT=60
