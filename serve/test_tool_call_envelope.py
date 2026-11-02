@@ -113,6 +113,10 @@ class OnlyDeclaredTools(unittest.TestCase):
         evs, p = run(body("<function=functions.exec_command>", "cmd", "ls"), 4,
                      tools=[{"name": "exec_command", "parameters": {"properties": {"cmd": {"type": "string"}}}}])
         self.assertEqual(calls(evs), [("exec_command", {"cmd": "ls"})])
+        # Codex writes its custom tools with the `tools.` prefix
+        evs, p = run(body("<function=tools.exec>", "input", "uname -s"), 4,
+                     tools=[{"name": "exec", "parameters": {"properties": {"input": {"type": "string"}}}}])
+        self.assertEqual(calls(evs), [("exec", {"input": "uname -s"})])
 
     def test_no_tools_declared(self):
         raw = body("<function=search>", "q", "2+2")

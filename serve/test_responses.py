@@ -15,7 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from serve import responses  # noqa: E402
-from serve.frontend import ChatTemplate  # noqa: E402
+from serve.frontend import ChatTemplate, OutputParser  # noqa: E402
 from serve.responses import (ENCRYPTED_PREFIX, ResponsesError, collect, input_messages, prompt_made,  # noqa: E402
                              prompt_tools, request_tools, template_kwargs, text_format, thread_title_events)
 from serve.server import ByteTokenizer, MockEngine, Service, serve  # noqa: E402
@@ -118,12 +118,14 @@ class Parsing(unittest.TestCase):
             {"type": "custom", "name": "apply_patch", "description": "Patch.",
              "format": {"type": "grammar", "syntax": "lark", "definition": "start: \"x\""}},
             {"type": "web_search"}]})
-        self.assertEqual([t["name"] for t in tools], ["exec_command", "mcp_fs.read", "apply_patch"])
+        self.assertEqual([t["name"] for t in tools], ["exec_command", "mcp_fs.read", "apply_patch", "web_search"])
         self.assertEqual(tools[1]["description"], "Files.")
         self.assertIn("start: \"x\"", tools[2]["description"])
         self.assertEqual(names["mcp_fs.read"], ("mcp_fs", "read", "function"))
+        # the request's own `apply_patch` keeps its custom definition; the hosted web_search is declared under its kind
         self.assertEqual(names["apply_patch"], (None, "apply_patch", "custom"))
-        self.assertEqual(skipped, ["web_search"])
+        self.assertEqual(names["web_search"], (None, "web_search", "function"))
+        self.assertEqual(skipped, [])
         self.assertIsNone(request_tools({"tools": TOOLS, "tool_choice": "none"})[0])
 
     def test_a_codex_mcp_declaration_registers_its_server_tools(self):
@@ -134,6 +136,20 @@ class Parsing(unittest.TestCase):
         self.assertEqual([t["name"] for t in tools], ["mcp__codex_app.list_threads"])
         self.assertEqual(names["mcp__codex_app.list_threads"], ("mcp__codex_app", "list_threads", "function"))
         self.assertEqual(skipped, ["mcp"])
+
+    def test_a_local_shell_declaration_declares_the_calls_codex_writes(self):
+        # Codex runs local_shell itself; the model spells its calls exec / exec_command / apply_patch,
+        # the last two under a prefix.  Undeclared, those calls came back as text (strata_rejected_tool_calls).
+        tools, names, skipped = request_tools({"tools": [{"type": "local_shell"},
+                                                         {"type": "mcp", "server_url": "https://hosted"}]})
+        self.assertEqual([t["name"] for t in tools], ["exec", "exec_command", "apply_patch"])
+        self.assertEqual(names["exec"], (None, "exec", "function"))
+        self.assertEqual(skipped, ["mcp"])
+        parser = OutputParser(thinking=False, stream_tools=True, tools=tools)
+        events = parser.feed("<tool_call>\n<function=tools.exec>\n<parameter=cmd>\nls\n</parameter>\n"
+                             "</function>\n</tool_call>") + parser.finish()
+        self.assertEqual([(e.call.name, e.call.arguments) for e in events if e.kind == "tool_call"],
+                         [("exec", {"cmd": "ls"})])
 
     def test_additional_tools_input_items_are_accepted(self):
         """#782: Codex sends an `additional_tools` input item; it used to be refused with a 400."""

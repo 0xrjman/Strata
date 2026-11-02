@@ -9,7 +9,8 @@ Codex CLI is the first client.  What it needs, and what this does:
   * `instructions` and `developer` messages -> the system message (leading ones merged, so the prompt start is stable
     and the conversation cache holds across turns);
   * function tools, also inside `namespace` tools (Codex's MCP and agent tools: the model sees `namespace.name`) and
-    `custom` tools (a free-form `input` string); hosted tools (web search, ...) are left out, the model cannot run them;
+    `custom` tools (a free-form `input` string); hosted tools (web search, local shell, ...) are the client's to run,
+    so they are declared under the names the model writes calls with;
   * reasoning items: the model's thinking is returned as `reasoning_text` content (no summaries: this model does not
     write them, see docs/DETAILS.md) and, when `include` asks for `reasoning.encrypted_content`, also as an opaque
     `encrypted_content` string (base64, not encrypted: the client already holds the text).  Either form sent back is
@@ -32,6 +33,12 @@ from serve.frontend import Event, _late_system_to_user, _parts_of, effort_kwargs
 ENCRYPTED_PREFIX = "strata.r1:"                   # our own reasoning replay strings; others' are ignored
 HOSTED_TOOLS = ("web_search", "web_search_preview", "file_search", "computer_use_preview", "computer_use",
                 "code_interpreter", "image_generation", "local_shell", "mcp", "tool_search")
+# A hosted tool the client runs is declarable: its names go into the declared set, so a call naming one binds.
+# `local_shell` is spelled by the model as exec / exec_command / apply_patch; `mcp` has no names of its own.
+CLIENT_RUN_TOOLS = {"local_shell": ("exec", "exec_command", "apply_patch"), "web_search": ("web_search",),
+                    "file_search": ("file_search",), "computer_use": ("computer_use",),
+                    "code_interpreter": ("code_interpreter",), "image_generation": ("image_generation",),
+                    "tool_search": ("tool_search",)}
 
 
 class ResponsesError(ValueError):
@@ -250,7 +257,7 @@ def _order_tool_results(messages):
 
 def request_tools(req: dict):
     """-> (template tools or None, {template name: (namespace, name, kind)}, names of hosted tools left out)."""
-    tools, names, skipped = [], {}, []
+    tools, names, skipped, client_run = [], {}, [], []
     given = req.get("tools") or []
     if not isinstance(given, list):
         raise ResponsesError("tools must be an array", "tools")
@@ -298,9 +305,17 @@ def request_tools(req: dict):
                 add({"type": "function", **member}, f"{param}.tools[{j}]", tool.get("name"),
                     tool.get("description") or "")
         elif kind in HOSTED_TOOLS or isinstance(kind, str):
-            skipped.append(kind)                     # the model cannot run OpenAI's hosted tools: left out
+            if kind in CLIENT_RUN_TOOLS:
+                client_run.append(kind)              # the client runs it: its names are declared below
+            else:
+                skipped.append(kind)                 # the model cannot run it and it names nothing: left out
         else:
             raise ResponsesError("a tool needs a type", param + ".type")
+    # declared after the request's own tools, so a request that names one of these keeps its own definition
+    for kind in client_run:
+        for name in CLIENT_RUN_TOOLS[kind]:
+            if name not in names:
+                add({"type": "function", "name": name}, "tools")
     choice = req.get("tool_choice")
     if choice == "none":
         return None, names, skipped
