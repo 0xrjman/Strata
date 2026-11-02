@@ -314,8 +314,9 @@ def request_tools(req: dict):
             raise ResponsesError("a tool needs a type", param + ".type")
     # declared after the request's own tools, so a request that names one of these keeps its own definition.
     # A Codex client runs its own tools, so its vocabulary is declarable: Codex sends a request without `local_shell`.
-    # Only a request that declares tools: a Codex compaction declares none and its prompt must stay byte-identical.
-    for kind in client_run + (["local_shell"] if given and _turn_body(req) else []):
+    # Only a Codex turn that is not a compaction: a compaction's prompt must stay byte-identical, so it declares none.
+    for kind in client_run + (["local_shell"] if (body := _turn_body(req)) is not None
+                              and body.get("request_kind") != "compaction" else []):
         for name in CLIENT_RUN_TOOLS[kind]:
             if name not in names:
                 add({"type": "custom" if name in FREEFORM_NAMES else "function", "name": name}, "tools")

@@ -254,8 +254,9 @@ class CodexCompaction(unittest.TestCase):
         self.assertEqual(tools_of({"input": COMPACT_PROMPT, "prompt_cache_key": "same"}), (None, None))
         self.assertEqual(tools_of(codex_request("compaction", meta={})), (None, None))
         self.assertEqual(tools_of(codex_request("compaction"))[1], request_tools(codex_request("turn", tools=TOOLS))[0])   # a Codex turn declares its client tool names too
-        self.assertEqual(tools_of(codex_request("turn")), (None, None))   # a turn of A without tools ...
-        self.assertIsNone(tools_of(codex_request("compaction"))[1])        # ... is what its compaction follows
+        own = tools_of(codex_request("turn"))                              # a turn of A that declares no tools ...
+        self.assertEqual([t["name"] for t in own[0]], ["exec", "exec_command", "apply_patch"])
+        self.assertEqual(tools_of(codex_request("compaction"))[1], own[0])  # ... is what its compaction follows
 
     def test_the_compact_prompt_in_a_message_is_not_a_compaction(self):
         tools_of(codex_request("turn", tools=TOOLS))
@@ -263,7 +264,7 @@ class CodexCompaction(unittest.TestCase):
         self.assertEqual(tools_of(quoted), (None, None))  # the compact prompt's words, without Codex saying so
         turn = codex_request("turn", last=COMPACT_PROMPT)
         turn["input"] = HISTORY + [{"role": "user", "content": "Explain this: " + COMPACT_PROMPT}]
-        self.assertEqual(tools_of(turn), (None, None))   # Codex says it is a turn: as sent
+        self.assertEqual(tools_of(turn)[1], request_tools(codex_request("turn"))[0])   # Codex says it is a turn: its names
 
     def test_a_thread_title_turn_does_not_replace_the_kept_tools(self):
         tools_of(codex_request("turn", tools=TOOLS))
@@ -312,7 +313,7 @@ class CodexCompaction(unittest.TestCase):
         self.assertEqual(tools_of(codex_request("compaction"))[1], first)   # A's entry was not touched
         odd = {"x-codex-turn-metadata": json.dumps({"request_kind": ["compaction"], "session_id": "019a-a",
                                                     "thread_id": "019a-a"})}
-        self.assertEqual(tools_of(codex_request("compaction", meta=odd)), (None, None))   # not a compaction: as sent
+        self.assertEqual(tools_of(codex_request("compaction", meta=odd)), tools_of(codex_request("turn")))   # not a compaction: its own names
 
 
 class NoLeakedSampler(unittest.TestCase):
@@ -804,6 +805,14 @@ class CodexCompactionOverHttp(Server):
             {"type": "message", "role": "user", "content": [{"type": "input_text", "text": COMPACT_PROMPT}]}],
             **extra})
         return self.tok.decode(self.engine.last_prompt), code, r
+
+    def test_a_codex_turn_that_sends_no_tools_declares_the_client_tool_names(self):
+        names = request_tools(codex_request("turn"))[1]
+        self.assertEqual([names[n][2] for n in ("exec", "exec_command", "apply_patch")],
+                         ["function", "function", "custom"])
+
+    def test_a_codex_compaction_that_sends_no_tools_declares_none_of_them(self):
+        self.assertFalse({"exec", "exec_command", "apply_patch"} & set(request_tools(codex_request("compaction"))[1]))
 
     def test_the_kept_tools_shape_only_the_prompt(self):
         prompt, code, r = self.compaction(codex_meta("compaction"))
