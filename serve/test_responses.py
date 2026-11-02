@@ -151,6 +151,15 @@ class Parsing(unittest.TestCase):
         self.assertEqual([(e.call.name, e.call.arguments) for e in events if e.kind == "tool_call"],
                          [("exec", {"cmd": "ls"})])
 
+    def test_a_codex_request_declares_its_client_tool_names_without_local_shell(self):
+        bash = {"type": "function", "name": "Bash", "parameters": {"type": "object"}}
+        names = request_tools(codex_request("turn", tools=[bash]))[1]
+        self.assertEqual(set(names) & {"apply_patch", "exec", "exec_command"}, {"apply_patch", "exec", "exec_command"})
+        self.assertIn("Bash", names)
+        plain = {"input": "hi", "tools": [bash], "client_metadata": {}}
+        self.assertEqual(set(request_tools(plain)[1]) & {"apply_patch", "exec", "exec_command"}, set())
+        self.assertEqual([request_tools(plain)[2], request_tools(codex_request("turn", tools=[bash]))[2]], [[], []])
+
     def test_additional_tools_input_items_are_accepted(self):
         """#782: Codex sends an `additional_tools` input item; it used to be refused with a 400."""
         extra = {"type": "additional_tools", "tools": [{"type": "function", "name": "later_tool",
@@ -237,14 +246,14 @@ class CodexCompaction(unittest.TestCase):
         self.assertEqual(tools_of(codex_request("compaction", B))[1], b)  # and they changed nothing
         tools_of(codex_request("turn", A, TOOLS))
         self.assertIsNone(tools_of(codex_request("compaction", B))[1])    # A's turn came last: B reads again
-        self.assertEqual(tools_of(codex_request("compaction", A))[1], request_tools({"tools": TOOLS})[0])
+        self.assertEqual(tools_of(codex_request("compaction", A))[1], request_tools(codex_request("turn", tools=TOOLS))[0])   # a Codex turn declares its client tool names too
 
     def test_requests_that_are_not_a_codex_compaction_are_rendered_as_sent(self):
         tools_of(codex_request("turn", tools=TOOLS))
         self.assertEqual(tools_of({"input": "another chat"}), (None, None))
         self.assertEqual(tools_of({"input": COMPACT_PROMPT, "prompt_cache_key": "same"}), (None, None))
         self.assertEqual(tools_of(codex_request("compaction", meta={})), (None, None))
-        self.assertEqual(tools_of(codex_request("compaction"))[1], request_tools({"tools": TOOLS})[0])
+        self.assertEqual(tools_of(codex_request("compaction"))[1], request_tools(codex_request("turn", tools=TOOLS))[0])   # a Codex turn declares its client tool names too
         self.assertEqual(tools_of(codex_request("turn")), (None, None))   # a turn of A without tools ...
         self.assertIsNone(tools_of(codex_request("compaction"))[1])        # ... is what its compaction follows
 
@@ -265,7 +274,7 @@ class CodexCompaction(unittest.TestCase):
         title["client_metadata"]["x-codex-turn-metadata"] = json.dumps(meta)
         prompt_made(title, None)
         self.assertEqual(responses._kept_prompt_tools, kept)
-        self.assertEqual(tools_of(codex_request("compaction"))[1], request_tools({"tools": TOOLS})[0])
+        self.assertEqual(tools_of(codex_request("compaction"))[1], request_tools(codex_request("turn", tools=TOOLS))[0])   # a Codex turn declares its client tool names too
 
     def test_a_custom_compact_prompt_is_a_compaction_when_codex_says_so(self):
         first = tools_of(codex_request("turn", tools=TOOLS))[1]

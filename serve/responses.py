@@ -311,8 +311,10 @@ def request_tools(req: dict):
                 skipped.append(kind)                 # the model cannot run it and it names nothing: left out
         else:
             raise ResponsesError("a tool needs a type", param + ".type")
-    # declared after the request's own tools, so a request that names one of these keeps its own definition
-    for kind in client_run:
+    # declared after the request's own tools, so a request that names one of these keeps its own definition.
+    # A Codex client runs its own tools, so its vocabulary is declarable: Codex sends a request without `local_shell`.
+    # Only a request that declares tools: a Codex compaction declares none and its prompt must stay byte-identical.
+    for kind in client_run + (["local_shell"] if given and _turn_body(req) else []):
         for name in CLIENT_RUN_TOOLS[kind]:
             if name not in names:
                 add({"type": "function", "name": name}, "tools")
