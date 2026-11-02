@@ -34,8 +34,18 @@ WORKDIR /src
 ARG PIP_INDEX_URL=https://mirrors.ustc.edu.cn/pypi/web/simple
 COPY requirements.txt requirements-build.txt ./
 RUN python3 -m venv /venv && /venv/bin/pip install --no-cache-dir --index-url "${PIP_INDEX_URL}" --timeout 60 --retries 10 -r requirements.txt -r requirements-build.txt
-# full tree: cmake/ggml-tq_overlay.cmake reads third_party/, which an enumerated COPY would drop
-COPY . .
+# compile inputs only (a serve/ edit must not bust the CUDA compile layers below):
+# setup.py+the llama.cpp seed for RUN get_llama_cpp; CMakeLists/cmake/include/src/tools/third_party for cmake -S .;
+# CMakeLists for the version sed and packaging/{collect_libs,package_engine,binary_deps}.py + strata_control/ (package_engine imports it)
+COPY CMakeLists.txt setup.py ./
+COPY cmake/ cmake/
+COPY include/ include/
+COPY src/ src/
+COPY tools/ tools/
+COPY tests/ tests/
+COPY third_party/ third_party/
+COPY strata_control/ strata_control/
+COPY packaging/collect_libs.py packaging/package_engine.py packaging/binary_deps.py packaging/
 ARG CUDA_ARCHITECTURES="75;80;86;89;120"
 ARG BUILD_VISION=1
 ARG ENGINE_VERSION=
