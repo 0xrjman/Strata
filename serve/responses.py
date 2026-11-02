@@ -39,6 +39,7 @@ CLIENT_RUN_TOOLS = {"local_shell": ("exec", "exec_command", "apply_patch"), "web
                     "file_search": ("file_search",), "computer_use": ("computer_use",),
                     "code_interpreter": ("code_interpreter",), "image_generation": ("image_generation",),
                     "tool_search": ("tool_search",)}
+FREEFORM_NAMES = {"apply_patch"}   # client-run names the model writes as a raw body, not as <parameter> tags
 
 
 class ResponsesError(ValueError):
@@ -317,7 +318,7 @@ def request_tools(req: dict):
     for kind in client_run + (["local_shell"] if given and _turn_body(req) else []):
         for name in CLIENT_RUN_TOOLS[kind]:
             if name not in names:
-                add({"type": "function", "name": name}, "tools")
+                add({"type": "custom" if name in FREEFORM_NAMES else "function", "name": name}, "tools")
     choice = req.get("tool_choice")
     if choice == "none":
         return None, names, skipped
@@ -637,7 +638,9 @@ class Assembler:
                                           output_index=self.index, delta=item["arguments"]))
             if item["type"] == "custom_tool_call":
                 value = ev.call.arguments.get("input") if isinstance(ev.call.arguments, dict) else None
-                item["input"] = value if isinstance(value, str) else json.dumps(ev.call.arguments, ensure_ascii=False)
+                item["input"] = (value if isinstance(value, str)              # a written `<parameter=input>` wins
+                                 else ev.call.raw if ev.call.raw.strip()      # freeform: the body as the model wrote it
+                                 else json.dumps(ev.call.arguments, ensure_ascii=False))
                 out.append(self.event("response.custom_tool_call_input.delta", item_id=item["id"],
                                       output_index=self.index, delta=item["input"]))
             out += self.close("completed")

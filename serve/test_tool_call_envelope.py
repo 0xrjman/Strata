@@ -142,5 +142,15 @@ class OnlyDeclaredTools(unittest.TestCase):
         self.assertEqual(calls(evs), [])
 
 
+class RawBodyKept(unittest.TestCase):
+    def test_a_parsed_call_keeps_its_raw_body_alongside_its_arguments(self):
+        for width in (0, 3):
+            with self.subTest(width=width):
+                evs, _ = run(body("<function=shell>", "cmd", "ls -l"), width, tools=TOOLS)
+                call, = [e.call for e in evs if e.kind == "tool_call"]
+                self.assertEqual(call.arguments, {"cmd": "ls -l"})
+                self.assertEqual(call.raw, "<parameter=cmd>\nls -l\n</parameter>")
+
+
 if __name__ == "__main__":
     unittest.main()

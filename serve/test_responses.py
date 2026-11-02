@@ -661,6 +661,23 @@ class ToolRoundTrip(Server):
         self.assertEqual([c["function"]["name"] for c in msgs[1]["tool_calls"]],
                          ["multi_agent_v1.spawn_agent", "apply_patch"])
 
+    def test_a_client_run_freeform_call_keeps_the_body_as_the_model_wrote_it(self):
+        """Codex declares no `tools` array: `apply_patch` comes from the tail pass, and its patch is the raw body."""
+        patch = "*** Begin Patch\n*** Update File: a.txt\n@@\n-a\n+b\n*** End Patch"
+        self.engine.scripts = [self.tok.encode(
+            f"</think>\n\n<tool_call>\n<function=apply_patch>\n{patch}\n</function>\n</tool_call><|im_end|>",
+            parse_special=True)]
+        self.engine.script = self.engine.scripts[0]
+        req = {"model": "m", "input": [{"type": "additional_tools", "role": "developer",
+                                        "tools": [{"type": "local_shell"}]},
+                                       {"role": "user", "content": "go"}],
+               "client_metadata": codex_meta("turn")}
+        code, r = self.post(req)
+        self.assertEqual(code, 200, r)
+        call, = [o for o in r["output"] if o["type"] == "custom_tool_call"]
+        self.assertEqual((call["type"], call["name"], call["input"]),
+                         ("custom_tool_call", "apply_patch", patch))
+
 
 class JsonFormatWithTools(Server):
     """#782: Codex's review request carries an `additional_tools` item, tools, and `text.format` json_schema together.

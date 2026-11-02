@@ -725,6 +725,7 @@ class ToolCall:
     name: str
     arguments: dict
     id: str = field(default_factory=lambda: "call_" + uuid.uuid4().hex[:24])
+    raw: str = ""                   # the body as written, between the opener and `</function>` (freeform tools)
 
 
 @dataclass
@@ -1070,6 +1071,9 @@ def parse_tool_call(body: str, schema: dict | None = None, notes: list | None = 
         raise ValueError("malformed tool call: " + body[:80])
     name = body[len("<function="):body.index(">")].strip()      # `<function= capture>`: the model's stray space
     rest = body[body.index(">") + 1:]
+    raw = rest.strip()
+    if raw.endswith(FUNC_END):                      # callers that kept the close: the tag is not body text
+        raw = raw[:-len(FUNC_END)].strip()
     props = ((schema or {}).get("parameters") or {}).get("properties") or {}
     args = {}
     while "<parameter=" in rest:
@@ -1084,7 +1088,7 @@ def parse_tool_call(body: str, schema: dict | None = None, notes: list | None = 
         if value.endswith("\n"):
             value = value[:-1]
         args[pname] = coerce_value(value, (props.get(pname) or {}).get("type"), notes)
-    return ToolCall(name=name, arguments=args)
+    return ToolCall(name=name, arguments=args, raw=raw)
 
 
 RCALL_MAX = 32768        # the most of a `<tool_call>` inside the reasoning that is held while waiting for its end (#804)
