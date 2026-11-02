@@ -4596,6 +4596,9 @@ class ForcedToolChoice(unittest.TestCase):
                 finish, calls, _ = self.call_of(code, b, stream)
                 self.assertEqual((finish, calls), ("tool_calls", [("execute_gdscript", {"q": "2+2"})]), b)
                 self.assertIsNone(self._rejected_of(b, stream))
+        code, b = self.openai(tools=[], client_metadata={"x-codex-turn-metadata": "{}"})
+        self.assertEqual(self.call_of(code, b, False)[:2], ("tool_calls", [("execute_gdscript", {"q": "2+2"})]),
+                         "Codex sends no `tools`: the turn's metadata alone makes the call the call")
         code, b = self.openai()                       # an ordinary client: unchanged
         self.assertEqual(self.call_of(code, b, False)[:2], ("stop", []))
 

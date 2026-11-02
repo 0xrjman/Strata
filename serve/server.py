@@ -5508,10 +5508,17 @@ class Service:
                 print(f"[strata] thinking capped at {max_new - reserve} of max_tokens {max_new} to leave room for "
                       f"the answer (budget {budget})", flush=True)
                 budget = max(1, max_new - reserve)
+        meta = sampling.get("client_metadata") if isinstance(sampling, dict) else None
+        accept_undeclared = bool(isinstance(sampling, dict) and isinstance(meta, dict)
+                                 and "x-codex-turn-metadata" in meta)
+        print(f"[codex-probe] tools={len(sampling.get('tools') or []) if isinstance(sampling, dict) else 'n/a'} "
+              f"meta_keys={sorted(meta)[:8] if isinstance(meta, dict) else type(meta).__name__} "
+              f"turn_type={type(meta.get('x-codex-turn-metadata')).__name__ if isinstance(meta, dict) else '-'} "
+              f"turn_len={len(meta.get('x-codex-turn-metadata') or '') if isinstance(meta, dict) else 0} "
+              f"accept={accept_undeclared}", flush=True)
         parser = self.parser_cls(thinking=thinking, tools=with_history_tools(tools, sampling), stream_tools=True,
                                  recover=self.tool_call_recovery, declared_only=declared_only,
-                                 accept_undeclared=bool(isinstance(sampling, dict) and sampling.get("tools")
-                                                        and responses_api._turn_body(sampling) is not None))
+                                 accept_undeclared=accept_undeclared)
         detok, n, finish = Detokenizer(self.tok), 0, "length"
         run_tok, run_len, repeated = None, 0, False     # #606: the current run of one repeated token
         thinking_n = 0                                  # tokens written while thinking (Responses' reasoning_tokens)
