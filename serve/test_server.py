@@ -4602,6 +4602,48 @@ class ForcedToolChoice(unittest.TestCase):
         code, b = self.openai()                       # an ordinary client: unchanged
         self.assertEqual(self.call_of(code, b, False)[:2], ("stop", []))
 
+    def responses(self, tools, meta=None, stream=False):
+        body = {"model": "m", "input": "patch a.py", "tools": tools, "max_output_tokens": 400, "stream": stream}
+        if meta is not None:
+            body["client_metadata"] = meta
+        req = urllib.request.Request(self.base + "/v1/responses", data=json.dumps(body).encode(),
+                                     headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                raw = r.read().decode()
+                return r.status, (raw if stream else json.loads(raw))
+        except urllib.error.HTTPError as e:
+            with e:
+                return e.code, json.loads(e.read())
+
+    def test_a_codex_turn_patch_written_as_its_own_tag_is_the_custom_call(self):
+        """Codex writes apply_patch as `<apply_patch> … </apply_patch>` (no `<function=`, and no `<tool_call>`
+        around it at all): the call it means, with the patch as its input verbatim.  The same request without the
+        turn's metadata keeps the patch as text, as it always did."""
+        from serve.frontend import CALL_END, CALL_START
+        patch = "*** Begin Patch\n*** Update File: a.py\n@@\n-x\n+y\n*** End Patch"
+        tag = f"<apply_patch>\n{patch}\n</apply_patch>"
+        tools = [{"type": "custom", "name": "apply_patch", "description": "Edit files."}]
+        meta = {"x-codex-turn-metadata": "{}"}
+        for stream in (False, True):
+            for answer in (tag, CALL_START + "\n" + tag + "\n" + CALL_END):
+                self.says(answer)
+                with self.subTest(stream=stream, wrapped=answer != tag):
+                    code, b = self.responses(tools, meta, stream)
+                    self.assertEqual(code, 200, b)
+                    raw = b if stream else json.dumps(b)
+                    self.assertIn("custom_tool_call", raw)
+                    self.assertIn(json.dumps(patch)[1:-1], raw)        # the patch, newlines and all
+                    if not stream:
+                        call, = [i for i in b["output"] if i["type"] == "custom_tool_call"]
+                        self.assertEqual((call["name"], call["input"]), ("apply_patch", patch))
+        self.says(tag)
+        code, b = self.responses(tools)                                 # no turn metadata: unchanged
+        self.assertEqual(code, 200, b)
+        self.assertNotIn("custom_tool_call", json.dumps(b))
+        self.assertEqual("".join(c["text"] for item in b["output"] if item["type"] == "message"
+                                 for c in item["content"]), tag)
+
     def test_no_marker_when_nothing_was_rejected(self):
         """An ordinary answer and a declared call carry no extra field: the API is what it was."""
         from serve.frontend import CALL_END, CALL_START

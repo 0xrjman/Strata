@@ -1203,9 +1203,31 @@ class OutputParser:
             bare = after[1:].strip().lstrip("=").strip()
             if after[1:].lstrip().startswith(("=", "function")):
                 return "wait"
-            if any(k.startswith(bare) for k in list(self.schemas) + list(self.aliases) if isinstance(k, str)):
+            if self.accept_undeclared or any(k.startswith(bare) for k in list(self.schemas) + list(self.aliases)
+                                             if isinstance(k, str)):
                 return "wait"
         return None
+
+    def _loose_bare(self) -> tuple[int, str, int, int]:
+        """accept_undeclared (a Codex turn): the first `<NAME> … </NAME>` written in the answer without the
+        `<tool_call>` wrapper -> (position, name, length of the opener, position of the `</NAME>`); -1 as the close
+        while the close has not arrived.  (-1, "", 0, -1) for none.  The same `_callable` test as `_loose_open`.
+        ponytail: scans every `<` of the unflushed tail; tails stay short, widen it if a profile says otherwise."""
+        p = self.buf.find("<")
+        held = (-1, "", 0, -1)
+        while p >= 0:
+            loose = self._loose_open(self.buf[p:])
+            if loose is not None and self._ok_at(p):
+                if loose == "wait":
+                    held = (p, "", 0, -1) if held[0] < 0 else held
+                    break
+                end = self.buf.find(f"</{loose[0]}>", p + loose[1])
+                if end >= 0:
+                    return p, loose[0], loose[1], end
+                if held[0] < 0:
+                    held = (p, loose[0], loose[1], -1)
+            p = self.buf.find("<", p + 1)
+        return held
 
     def _follower(self, after: str) -> str:
         """recover: what a `<tool_call>` followed (after whitespace) by `after` opens: "call" (`<function=`), "param"
@@ -1380,6 +1402,7 @@ class OutputParser:
         return out
 
     def _reset_scan(self):
+        self.loose_close = None      # a call written as `<NAME> … </NAME>`: the name of its own closing tag
         self._call_end_checked = 0   # closing-tag search progress for the current wrapped call
         self.sp = 0                  # how much of self.buf (the call body) the scanner has consumed
         self.ss = "name"             # name -> between -> str|raw -> ... -> function_done -> done
@@ -1659,6 +1682,23 @@ class OutputParser:
                     self.buf = self.buf[b:]
                     self.state, self.bare = "call", True
                     continue
+                lp, lname, lozen, lend = self._loose_bare() if self.accept_undeclared else (-1, "", 0, -1)
+                if lp >= 0 and (i < 0 or lp < i):
+                    # A Codex turn's `<apply_patch> … </apply_patch>` written with no wrapper at all: the same call,
+                    # rewritten into the envelope the rest of the parser reads.  Held until its close has arrived.
+                    j = lp
+                    while j > 0 and self.buf[j - 1] == "\n":
+                        j -= 1
+                    if j > 0:
+                        out.append(Event("content", self._track(self.buf[:j])))
+                    self.buf = self.buf[j:]
+                    lp, lend = lp - j, (lend - j) if lend >= 0 else -1
+                    if lend < 0:
+                        return out                        # the close is still arriving: held like a partial tag
+                    close = f"</{lname}>"
+                    self.buf = (CALL_START + "\n" + FUNC_START + lname + ">" + self.buf[lp + lozen:lend]
+                                + FUNC_END + CALL_END + self.buf[lend + len(close):])
+                    continue
                 if i < 0:
                     # Hold a partial tag AND the newlines before it: if a tool call follows, they are dropped,
                     # so emitting them early would make streamed and whole outputs differ.
@@ -1688,7 +1728,7 @@ class OutputParser:
                 # it is prose that names the format ("I'll use a <tool_call> block") - content, not a malformed call
                 # that ends the request.  Until its follower has arrived it is held, like a partial tag.
                 after = self.buf[i + len(CALL_START):].lstrip()
-                if self.schemas and not after.startswith(FUNC_START):
+                if (self.schemas or self.accept_undeclared) and not after.startswith(FUNC_START):
                     loose = self._loose_open(after)
                     if loose == "wait":                  # may still become one: held like a partial tag
                         j = i
@@ -1701,6 +1741,8 @@ class OutputParser:
                     if loose:                            # #3441: `<=NAME>` etc. is `<function=NAME>`
                         at = len(self.buf) - len(after)
                         self.buf = self.buf[:at] + FUNC_START + loose[0] + ">" + after[loose[1]:]
+                        # a call written as `<NAME> … </NAME>` closes with its own name: `_finish_call` drops that tag
+                        self.loose_close = loose[0] if after.startswith(f"<{loose[0]}>") else None
                         continue
                 kind = self._follower(after) if self.recover else None
                 if (after.startswith("<") and kind is None and not FUNC_START.startswith(after)
@@ -1887,6 +1929,9 @@ class OutputParser:
                 raise ValueError("whitespace tool name is not declared")
             call = parse_tool_call(body, self.schemas.get(name), self.notes)
             call.name = name
+            close = f"</{self.loose_close}>" if self.loose_close else None
+            if close and call.raw.endswith(close):      # `<NAME> … </NAME>`: the tag is not body text
+                call.raw = call.raw[:-len(close)].strip()
         except ValueError:
             if not self.recover:
                 raise

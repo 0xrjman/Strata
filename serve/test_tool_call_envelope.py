@@ -152,5 +152,42 @@ class RawBodyKept(unittest.TestCase):
                 self.assertEqual(call.raw, "<parameter=cmd>\nls -l\n</parameter>")
 
 
+PATCH = "*** Begin Patch\n*** Update File: a.py\n@@\n-x\n+y\n*** End Patch"
+
+
+class CodexWritesItsOwnTag(unittest.TestCase):
+    """A Codex turn writes its own tools as `<apply_patch> … </apply_patch>`: no `<function=`, and (often) no
+    `<tool_call>` around it at all.  Both spellings are the call, carrying the body as written."""
+
+    def test_the_loose_tag_inside_the_wrapper_is_the_call(self):
+        raw = f"<tool_call>\n<apply_patch>\n{PATCH}\n</apply_patch>\n</tool_call>"
+        for width in (0, 1, 3, 7):
+            with self.subTest(width=width):
+                evs, p = run("I'll edit.\n" + raw + "\nDone.", width, tools=[], accept_undeclared=True)
+                self.assertEqual(calls(evs), [("apply_patch", {})])
+                self.assertEqual([e.call.raw for e in evs if e.kind == "tool_call"], [PATCH])
+                self.assertEqual(text(evs), "I'll edit.Done.")
+                self.assertEqual(p.unread, 0)
+
+    def test_the_loose_tag_with_no_wrapper_at_all_is_the_call(self):
+        raw = f"<apply_patch>\n{PATCH}\n</apply_patch>"
+        for width in (0, 1, 3, 7):
+            with self.subTest(width=width):
+                evs, p = run("I'll edit.\n" + raw + "\nDone.", width, tools=[], accept_undeclared=True)
+                self.assertEqual(calls(evs), [("apply_patch", {})])
+                self.assertEqual([e.call.raw for e in evs if e.kind == "tool_call"], [PATCH])
+                self.assertEqual(text(evs), "I'll edit.Done.")
+                self.assertEqual(p.unread, 0)
+
+    def test_without_a_codex_turn_the_same_text_stays_text(self):
+        for raw in (f"<apply_patch>\n{PATCH}\n</apply_patch>",
+                    f"<tool_call>\n<apply_patch>\n{PATCH}\n</apply_patch>\n</tool_call>"):
+            for width in (0, 1, 5):
+                with self.subTest(wrapped=raw.startswith("<tool_call"), width=width):
+                    evs, p = run(raw, width, tools=[])
+                    self.assertEqual(calls(evs), [])
+                    self.assertEqual(text(evs), raw)
+
+
 if __name__ == "__main__":
     unittest.main()
