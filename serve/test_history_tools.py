@@ -40,6 +40,20 @@ class HistoryTools(unittest.TestCase):
         self.assertEqual(server.with_history_tools([], history("Bash")), [])
         self.assertIsNone(server.with_history_tools(None, history("Bash")))
 
+    def test_a_responses_input_item_counts_as_called(self):
+        req = {"input": [{"type": "message", "role": "user", "content": "go"},
+                         {"type": "function_call", "call_id": "c0", "name": "Bash", "arguments": "{}"},
+                         {"type": "function_call", "call_id": "c1", "name": "Bash", "arguments": "{}"},
+                         {"type": "function_call", "name": "TodoWrite", "arguments": "{}"},
+                         {"type": "function_call", "name": "search", "namespace": "mcp", "arguments": "{}"},
+                         {"type": "function_call_output", "call_id": "c0", "output": "ok"},
+                         {"type": "custom_tool_call", "name": "apply_patch", "input": "x"}]}
+        self.assertEqual([t["name"] for t in server.with_history_tools([TODO], req)],
+                         ["TodoWrite", "Bash", "mcp.search", "apply_patch"])
+        names, answer = run(server.with_history_tools([TODO], req))
+        self.assertEqual(names, ["Bash"])
+        self.assertEqual(answer, "")
+
     def test_odd_requests_are_left_alone(self):
         self.assertEqual(server.with_history_tools([TODO], None), [TODO])
         self.assertEqual(server.with_history_tools([TODO], {"messages": [None, {"role": "assistant", "tool_calls": [None, {}]}]}), [TODO])

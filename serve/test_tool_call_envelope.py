@@ -109,6 +109,10 @@ class OnlyDeclaredTools(unittest.TestCase):
         evs, p = run(body("<function=ns__web_search>", "q", "x"), 4, tools=TOOLS)
         # PR #3556: the call carries the declared spelling (ns.web_search), the one the client offered, not the model's flat one
         self.assertEqual(calls(evs), [("ns.web_search", {"q": "x"})])
+        # Harmony's functions. prefix is the same tool the request declared
+        evs, p = run(body("<function=functions.exec_command>", "cmd", "ls"), 4,
+                     tools=[{"name": "exec_command", "parameters": {"properties": {"cmd": {"type": "string"}}}}])
+        self.assertEqual(calls(evs), [("exec_command", {"cmd": "ls"})])
 
     def test_no_tools_declared(self):
         raw = body("<function=search>", "q", "2+2")

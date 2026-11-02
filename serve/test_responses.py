@@ -126,6 +126,15 @@ class Parsing(unittest.TestCase):
         self.assertEqual(skipped, ["web_search"])
         self.assertIsNone(request_tools({"tools": TOOLS, "tool_choice": "none"})[0])
 
+    def test_a_codex_mcp_declaration_registers_its_server_tools(self):
+        tools, names, skipped = request_tools({"tools": [
+            {"type": "mcp", "name": "mcp__codex_app", "server_url": "https://codex.app", "tools": [
+                {"type": "function", "name": "list_threads", "parameters": {"type": "object"}}]},
+            {"type": "mcp", "server_url": "https://hosted"}]})
+        self.assertEqual([t["name"] for t in tools], ["mcp__codex_app.list_threads"])
+        self.assertEqual(names["mcp__codex_app.list_threads"], ("mcp__codex_app", "list_threads", "function"))
+        self.assertEqual(skipped, ["mcp"])
+
     def test_additional_tools_input_items_are_accepted(self):
         """#782: Codex sends an `additional_tools` input item; it used to be refused with a 400."""
         extra = {"type": "additional_tools", "tools": [{"type": "function", "name": "later_tool",

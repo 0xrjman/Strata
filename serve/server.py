@@ -8910,7 +8910,7 @@ def with_history_tools(tools, req) -> list:
     earlier in this conversation that this turn's `tools` no longer lists.  That call came back as raw text with finish_reason "stop", and the
     client took it for prose and stopped.  A name the conversation's own assistant messages called is a tool the client has, so it counts as
     declared (the call comes back as a tool call; the client says what it does with it).  Nothing is added when the request declared no
-    tools at all, or for a name that is already declared."""
+    tools at all, or for a name that is already declared.  A /v1/responses request tells the same story with its `input` items."""
     if not tools or not isinstance(req, dict):
         return tools
     try:
@@ -8924,6 +8924,15 @@ def with_history_tools(tools, req) -> list:
                 if isinstance(name, str) and name and name not in have:
                     have.add(name)
                     extra.append({"name": name, "parameters": {"type": "object", "properties": {}}})
+        for call in req.get("input") or []:       # /v1/responses history, the same items responses.input_messages reads
+            if not isinstance(call, dict) or call.get("type") not in ("function_call", "custom_tool_call"):
+                continue
+            name = call.get("name")
+            if isinstance(name, str) and name and call.get("namespace"):
+                name = f"{call['namespace']}.{name}"          # responses.py declares a namespace tool as "ns.name"
+            if isinstance(name, str) and name and name not in have:
+                have.add(name)
+                extra.append({"name": name, "parameters": {"type": "object", "properties": {}}})
         return [*tools, *extra] if extra else tools
     except Exception:
         return tools

@@ -1110,11 +1110,13 @@ class OutputParser:
         # namespace=member (Qwen writes the <function= tag's equals sign into the name),
         # namespace_member (one underscore dropped), and the bare member when exactly one
         # declared tool has it. Only an unambiguous alias counts, and an exactly declared
-        # name always wins over an alias.
+        # name always wins over an alias.  Harmony's `functions.` prefix is the same tool:
+        # functions.<name> resolves to the declared <name>, dotted or with double underscore.
         aliases = {}
         for name in self.schemas:
             if not isinstance(name, str):
                 continue
+            aliases.setdefault(f"functions.{name}", set()).add(name)
             if "." in name:
                 namespace, member = name.rsplit(".", 1)
                 for alias in (f"{namespace}__{member}", f"{namespace}={member}",
@@ -1126,6 +1128,7 @@ class OutputParser:
         for name in self.schemas:
             if isinstance(name, str) and "__" in name:
                 aliases.setdefault(name.replace("__", "_"), set()).add(name)
+                aliases.setdefault(f"functions.{name.replace('__', '_')}", set()).add(name)
         self.aliases = {alias: next(iter(names)) for alias, names in aliases.items()
                         if len(names) == 1 and alias not in self.schemas}
         self.unread = 0              # #3441: `<tool_call>` blocks that opened like a call and were returned as text

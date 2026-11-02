@@ -286,6 +286,9 @@ def request_tools(req: dict):
         if not isinstance(tool, dict):
             raise ResponsesError("expected a tool object", param)
         kind = tool.get("type")
+        # a Codex `mcp` entry naming its server's tools is a namespace tool the client runs; the hosted one (no `tools`) stays out
+        if kind == "mcp" and isinstance(tool.get("tools"), list):
+            kind = "namespace"
         if kind in ("function", "custom"):
             add(tool, param)
         elif kind == "namespace":
