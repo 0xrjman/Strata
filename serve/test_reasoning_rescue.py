@@ -162,6 +162,11 @@ class Gates(unittest.TestCase):
     def test_an_undeclared_name_stays_reasoning(self):
         self.check("go\n" + CALL.replace("write", "other"), 0)
 
+    def test_accept_undeclared_lifts_the_undeclared_name_out_of_reasoning(self):
+        p = OutputParser(thinking=True, tools=SCHEMA, accept_undeclared=True)
+        evs = p.feed("go\n" + CALL.replace("write", "other")) + p.finish()
+        self.assertEqual(calls(evs), ["other"])
+
     def test_the_counters(self):
         p = OutputParser(thinking=True, tools=SCHEMA)
         p.feed("go\n" + CALL)

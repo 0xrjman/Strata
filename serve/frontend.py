@@ -1095,7 +1095,7 @@ class OutputParser:
     until it is complete, so clients never see `<tool_` or `</thi`."""
 
     def __init__(self, thinking: bool = True, tools: list[dict] | None = None, stream_tools: bool = False,
-                 recover: bool = False, declared_only: bool = False):
+                 recover: bool = False, declared_only: bool = False, accept_undeclared: bool = False):
         self.state = "reasoning" if thinking else "content"
         self.buf = ""
         self.lead = False
@@ -1106,6 +1106,9 @@ class OutputParser:
         # the client has no tool to run).  The Responses route leaves it off: a Codex compaction request keeps its
         # conversation's tools in the prompt only, and its calls come back as before.
         self.declared_only = declared_only
+        # A Codex turn declares its client tools (apply_patch, exec) in the request's metadata rather than in `tools`,
+        # so a call for a name it did not list is still the call it means.  Off for every other request.
+        self.accept_undeclared = accept_undeclared
         # A declared namespace.member tool is also accepted as namespace__member (PR #3556),
         # namespace=member (Qwen writes the <function= tag's equals sign into the name),
         # namespace_member (one underscore dropped), and the bare member when exactly one
@@ -1177,6 +1180,8 @@ class OutputParser:
     def _callable(self, name: str) -> bool:
         """#3075: may a call for `name` be a call?  A tool the request declared (or its Responses spelling); with
         none declared, only where `declared_only` is off."""
+        if self.accept_undeclared:
+            return True
         if not self.schemas:
             return not self.declared_only
         return name in self.schemas or name in self.aliases
@@ -1235,7 +1240,7 @@ class OutputParser:
                 name = self.aliases.get(name, name)
                 if gt < 0 and re.fullmatch(r"\s*[^<>\s]*\s*", raw_name):
                     return p, False
-                if gt >= 0 and name in self.schemas:
+                if gt >= 0 and (name in self.schemas or self.accept_undeclared):
                     return p, True
             p = self.buf.find(FUNC_START, p + 1)
         return -1, False
@@ -1538,7 +1543,7 @@ class OutputParser:
                     try:
                         name = body[:end].strip()[len("<function="):].split(">", 1)[0].strip()
                         name = self.aliases.get(name, name)
-                        if name in self.schemas:
+                        if name in self.schemas or self.accept_undeclared:
                             call = parse_tool_call(body[:end], self.schemas.get(name), self.notes)
                             call.name = name
                     except ValueError:

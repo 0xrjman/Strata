@@ -99,6 +99,14 @@ class OnlyDeclaredTools(unittest.TestCase):
         evs, p = run(body("<function=shell>", "cmd", "ls"), 4, tools=TOOLS)         # a declared call is no unread call
         self.assertEqual((p.unread, p.unread_names), (0, []))
 
+    def test_accept_undeclared_parses_the_unparsed_call(self):
+        """A Codex turn's own tools are not in `tools`: with accept_undeclared the call is the call, not unread text."""
+        raw = body("<function=get_indicators>", "symbol", "600076")
+        evs, p = run("I will check." + chr(10) + raw, 4, tools=TOOLS, accept_undeclared=True)
+        self.assertEqual(calls(evs), [("get_indicators", {"symbol": 600076})])
+        self.assertEqual(text(evs), "I will check.")
+        self.assertEqual((p.unread, p.unread_names), (0, []))
+
     def test_a_declared_call_after_an_undeclared_one_is_still_a_call(self):
         raw = body("<function=get_indicators>") + "\n" + body("<function=shell>", "cmd", "ls")
         evs, p = run(raw, 5, tools=TOOLS)

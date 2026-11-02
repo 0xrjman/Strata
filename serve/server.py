@@ -5509,7 +5509,9 @@ class Service:
                       f"the answer (budget {budget})", flush=True)
                 budget = max(1, max_new - reserve)
         parser = self.parser_cls(thinking=thinking, tools=with_history_tools(tools, sampling), stream_tools=True,
-                                 recover=self.tool_call_recovery, declared_only=declared_only)
+                                 recover=self.tool_call_recovery, declared_only=declared_only,
+                                 accept_undeclared=bool(isinstance(sampling, dict) and sampling.get("tools")
+                                                        and responses_api._turn_body(sampling) is not None))
         detok, n, finish = Detokenizer(self.tok), 0, "length"
         run_tok, run_len, repeated = None, 0, False     # #606: the current run of one repeated token
         thinking_n = 0                                  # tokens written while thinking (Responses' reasoning_tokens)

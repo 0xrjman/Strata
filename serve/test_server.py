@@ -4586,6 +4586,19 @@ class ForcedToolChoice(unittest.TestCase):
                 if not stream:
                     self.assertIn("<function=execute_gdscript>", b["choices"][0]["message"]["content"])   # the text is untouched
 
+    def test_a_codex_turn_call_for_an_undeclared_tool_is_the_call(self):
+        """A Codex turn declares its own tools (apply_patch, exec) in client_metadata, not in `tools`: the call it
+        names is still the call.  Without that metadata the same request keeps the name as text, as before."""
+        self.says(self._undeclared_call_answer("execute_gdscript"))
+        for stream in (False, True):
+            with self.subTest(stream=stream):
+                code, b = self.openai(stream=stream, client_metadata={"x-codex-turn-metadata": "{}"})
+                finish, calls, _ = self.call_of(code, b, stream)
+                self.assertEqual((finish, calls), ("tool_calls", [("execute_gdscript", {"q": "2+2"})]), b)
+                self.assertIsNone(self._rejected_of(b, stream))
+        code, b = self.openai()                       # an ordinary client: unchanged
+        self.assertEqual(self.call_of(code, b, False)[:2], ("stop", []))
+
     def test_no_marker_when_nothing_was_rejected(self):
         """An ordinary answer and a declared call carry no extra field: the API is what it was."""
         from serve.frontend import CALL_END, CALL_START
