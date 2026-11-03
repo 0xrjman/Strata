@@ -94,7 +94,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 ca-cert
 COPY . /src/
 # host-side pre-download (proxy): this box cannot fetch the 67 MB asset reliably in-build, so seed the cache package_terminal.py reads
 COPY packaging/cache/cpython-3.12.15_20261009-x86_64-unknown-linux-gnu-install_only.tar.gz /cache/cpython-3.12.15_20261009-x86_64-unknown-linux-gnu-install_only.tar.gz
-# the sources have no .git here (and the stage has no git): the caller passes the commit, as docker/Dockerfile does
+# STRATA_COMMIT must be the full 40-hex sha (package_terminal.py rejects anything shorter); with a short or absent
+# value the stage falls back to `git rev-parse HEAD` of /src, which is why .git is re-included in .dockerignore
 ARG STRATA_COMMIT=
 ENV STRATA_BUILD_COMMIT=${STRATA_COMMIT}
 RUN python3 /src/packaging/package_terminal.py --out /out --cache /cache \

@@ -1,6 +1,9 @@
 # Keep the image to the source only: everything generated is re-created on
 # first start (inside the container or on the /data volume).
 .git
+# re-included: package_terminal.py reads `git rev-parse HEAD` of the source tree when --commit / STRATA_COMMIT
+# is absent or shorter than 40 hex, and a short `--build-arg STRATA_COMMIT=$(git rev-parse --short HEAD)` was fatal
+!.git
 
 # local Python environment (rebuilt in the image)
 .venv/
