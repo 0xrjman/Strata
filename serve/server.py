@@ -5917,8 +5917,10 @@ class Service:
                       f"the answer (budget {budget})", flush=True)
                 budget = max(1, max_new - reserve)
         meta = sampling.get("client_metadata") if isinstance(sampling, dict) else None
+        # A request that declares tools has its real vocabulary in the prompt (DeepSeek Harness, Codex-style harnesses):
+        # a call naming a tool outside `tools` is the call, not text the client takes for the end of the turn.
         accept_undeclared = bool(isinstance(sampling, dict) and isinstance(meta, dict)
-                                 and "x-codex-turn-metadata" in meta)
+                                 and "x-codex-turn-metadata" in meta) or bool(tools)
         parser = self.parser_cls(thinking=thinking, tools=with_history_tools(tools, sampling), stream_tools=True,
                                  recover=self.tool_call_recovery, declared_only=declared_only,
                                  accept_undeclared=accept_undeclared, deferred=deferred)

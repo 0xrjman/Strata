@@ -123,7 +123,8 @@ class Route(unittest.TestCase):
         self.assertNotIn("DeferredToolPlaceholder", self.tok.decode(self.engine.last_prompt))
 
     def test_without_tool_search_the_rule_holds(self):
-        b = self.post({"model": "m", "max_tokens": 512, "tools": [SEARCH],
+        # no tool declared and no tool_search: the call for the deferred name stays text
+        b = self.post({"model": "m", "max_tokens": 512, "tools": [],
                        "messages": [{"role": "user", "content": "search"}]})
         self.assertEqual(b["stop_reason"], "end_turn")
         self.assertEqual(b.get("strata_rejected_tool_calls"), [{"name": MCP, "reason": "undeclared"}])

@@ -619,9 +619,9 @@ class ToolRoundTrip(Server):
             code, r = self.post({"model": "m", "input": "go", "tools": tools, "stream": stream})
             self.assertEqual(code, 200, r)
             output = r[-1]["response"]["output"] if stream else r["output"]
-            # not an alias of either: with tools declared (the 0.2.2 rule, #3075) a call for an undeclared name stays text
-            self.assertFalse([item for item in output if item.get("type") == "function_call"], output)
-            self.assertIn("a__b__c", json.dumps(output))
+            # not an alias of either: the call comes back as the name the model wrote, never as a namespace's tool
+            self.assertEqual([(item.get("namespace"), item["name"]) for item in output
+                              if item.get("type") == "function_call"], [(None, "a__b__c")], output)
 
         # A declared exact name wins over alias spellings and keeps its string schema.
         tools.append({"type": "function", "name": "a__b__c", "parameters": {
