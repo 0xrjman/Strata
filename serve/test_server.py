@@ -4526,8 +4526,8 @@ class CallingEngine(MockEngine):
     def generate(self, ids, max_new, sampling, cancel, embeddings=None):
         self.prompts.append(list(ids))
         prompt = self.tok.decode(ids)
-        if prompt.endswith("<function="):
-            text = "search>\n" + self.ARGS
+        if prompt.endswith("<tool_call>\n"):
+            text = "<function=search>\n" + self.ARGS
         elif prompt.endswith("<function=search>\n"):
             text = self.ARGS
         elif prompt.endswith("</think>\n\n"):
@@ -4650,107 +4650,42 @@ class ForcedToolChoice(unittest.TestCase):
                 if not stream:
                     self.assertIn("<function=execute_gdscript>", b["choices"][0]["message"]["content"])   # the text is untouched
 
-    def test_a_codex_turn_call_for_an_undeclared_tool_is_the_call(self):
-        """A Codex turn declares its own tools (apply_patch, exec) in client_metadata, not in `tools`: the call it
-        names is still the call.  Without that metadata and with no tools declared, it keeps the name as text."""
+    def test_undeclared_tool_calls_call_hands_the_call_to_the_client(self):
+        """#4622: "undeclared_tool_calls": "call" returns the well-formed call of an undeclared name as a tool call (the client has its
+        own policy for unknown names); the default ("text") is the test above, unchanged."""
         self.says(self._undeclared_call_answer("execute_gdscript"))
-        for stream in (False, True):
-            with self.subTest(stream=stream):
-                code, b = self.openai(stream=stream, client_metadata={"x-codex-turn-metadata": "{}"})
-                finish, calls, _ = self.call_of(code, b, stream)
-                self.assertEqual((finish, calls), ("tool_calls", [("execute_gdscript", {"q": "2+2"})]), b)
-                self.assertIsNone(self._rejected_of(b, stream))
-        code, b = self.openai(tools=[], client_metadata={"x-codex-turn-metadata": "{}"})
-        self.assertEqual(self.call_of(code, b, False)[:2], ("tool_calls", [("execute_gdscript", {"q": "2+2"})]),
-                         "Codex sends no `tools`: the turn's metadata alone makes the call the call")
-        code, b = self.openai(tools=[])               # an ordinary client with no tools: unchanged
-        self.assertEqual(self.call_of(code, b, False)[:2], ("stop", []))
-
-    RUN_CODE = [{"type": "function", "function": {"name": "run_code", "description": "run code",
-                                                   "parameters": {"type": "object",
-                                                                  "properties": {"code": {"type": "string"}}}}}]
-
-    def test_a_prompt_defined_tool_call_is_the_call_when_the_request_declares_tools(self):
-        """A harness (DeepSeek Harness, Codex-style) declares a few tools and keeps the rest of its vocabulary in the
-        prompt: a call naming a tool outside `tools` is the call, with its arguments parsed."""
-        self.says(self._undeclared_call_answer("skill"))
-        for stream in (False, True):
-            with self.subTest(stream=stream):
-                code, b = self.openai(stream=stream, tools=self.RUN_CODE)
-                finish, calls, _ = self.call_of(code, b, stream)
-                self.assertEqual((finish, calls), ("tool_calls", [("skill", {"q": "2+2"})]), b)
-                self.assertIsNone(self._rejected_of(b, stream))
-
-    def test_a_prompt_defined_tool_call_is_a_function_call_on_the_responses_route(self):
-        """The same for /v1/responses with no client_metadata of any kind."""
-        self.says(self._undeclared_call_answer("skill"))
-        responses_shape = [{"type": "function", "name": "run_code",
-                            "parameters": {"type": "object", "properties": {"code": {"type": "string"}}}}]
-        for stream in (False, True):
-            with self.subTest(stream=stream):
-                code, b = self.responses(responses_shape, None, stream)
-                self.assertEqual(code, 200, b)
-                if stream:        # the completed items of the SSE stream
-                    output = [e["item"] for e in (json.loads(l[6:]) for l in b.splitlines() if l.startswith("data: {"))
-                              if e.get("type") == "response.output_item.done"]
-                else:
-                    output = b["output"]
-                calls = [i for i in output if i["type"] == "function_call"]
-                self.assertEqual([(c["name"], json.loads(c["arguments"])) for c in calls],
-                                 [("skill", {"q": "2+2"})], b)
-
-    def test_with_no_tools_declared_an_undeclared_call_stays_text(self):
-        """No tools and no turn metadata: the gate stays closed (declared_only), as before."""
-        self.says(self._undeclared_call_answer("skill"))
-        for stream in (False, True):
-            with self.subTest(stream=stream):
-                code, b = self.openai(stream=stream, tools=[])
-                finish, calls, _ = self.call_of(code, b, stream)
-                self.assertEqual((finish, calls), ("stop", []), b)
-                if not stream:
-                    self.assertIn("<function=skill>", b["choices"][0]["message"]["content"])
-
-    def responses(self, tools, meta=None, stream=False):
-        body = {"model": "m", "input": "patch a.py", "tools": tools, "max_output_tokens": 400, "stream": stream}
-        if meta is not None:
-            body["client_metadata"] = meta
-        req = urllib.request.Request(self.base + "/v1/responses", data=json.dumps(body).encode(),
-                                     headers={"Content-Type": "application/json"})
+        self.svc.undeclared_tool_calls = "call"
         try:
-            with urllib.request.urlopen(req, timeout=30) as r:
-                raw = r.read().decode()
-                return r.status, (raw if stream else json.loads(raw))
-        except urllib.error.HTTPError as e:
-            with e:
-                return e.code, json.loads(e.read())
+            for stream in (False, True):
+                with self.subTest(stream=stream):
+                    code, b = self.openai(stream=stream)
+                    finish, calls, _ = self.call_of(code, b, stream)
+                    self.assertEqual((finish, calls), ("tool_calls", [("execute_gdscript", {"q": "2+2"})]), b)
+                    self.assertIsNone(self._rejected_of(b, stream))
+            # prose that names the format is still text
+            self.says("Write <tool_call> and <function=x> to call a tool.")
+            code, b = self.openai(stream=False)
+            finish, calls, _ = self.call_of(code, b, False)
+            self.assertEqual((finish, calls), ("stop", []), b)
+        finally:
+            self.svc.undeclared_tool_calls = "text"
 
-    def test_a_codex_turn_patch_written_as_its_own_tag_is_the_custom_call(self):
-        """Codex writes apply_patch as `<apply_patch> … </apply_patch>` (no `<function=`, and no `<tool_call>`
-        around it at all): the call it means, with the patch as its input verbatim.  The same request without the
-        turn's metadata keeps the patch as text, as it always did."""
-        from serve.frontend import CALL_END, CALL_START
-        patch = "*** Begin Patch\n*** Update File: a.py\n@@\n-x\n+y\n*** End Patch"
-        tag = f"<apply_patch>\n{patch}\n</apply_patch>"
-        tools = [{"type": "custom", "name": "apply_patch", "description": "Edit files."}]
-        meta = {"x-codex-turn-metadata": "{}"}
-        for stream in (False, True):
-            for answer in (tag, CALL_START + "\n" + tag + "\n" + CALL_END):
-                self.says(answer)
-                with self.subTest(stream=stream, wrapped=answer != tag):
-                    code, b = self.responses(tools, meta, stream)
-                    self.assertEqual(code, 200, b)
-                    raw = b if stream else json.dumps(b)
-                    self.assertIn("custom_tool_call", raw)
-                    self.assertIn(json.dumps(patch)[1:-1], raw)        # the patch, newlines and all
-                    if not stream:
-                        call, = [i for i in b["output"] if i["type"] == "custom_tool_call"]
-                        self.assertEqual((call["name"], call["input"]), ("apply_patch", patch))
-        self.says(tag)
-        code, b = self.responses([])                                    # no tools, no turn metadata: unchanged
-        self.assertEqual(code, 200, b)
-        self.assertNotIn("custom_tool_call", json.dumps(b))
-        self.assertEqual("".join(c["text"] for item in b["output"] if item["type"] == "message"
-                                 for c in item["content"]), tag)
+    def test_undeclared_tool_calls_setting(self):
+        from serve.server import undeclared_tool_calls_setting
+        old = os.environ.pop("STRATA_UNDECLARED_TOOL_CALLS", None)
+        try:
+            self.assertEqual(undeclared_tool_calls_setting({}), "text")
+            self.assertEqual(undeclared_tool_calls_setting({"undeclared_tool_calls": "call"}), "call")
+            os.environ["STRATA_UNDECLARED_TOOL_CALLS"] = "call"
+            self.assertEqual(undeclared_tool_calls_setting({}), "call")
+            self.assertEqual(undeclared_tool_calls_setting({"undeclared_tool_calls": "text"}), "text")   # the config wins
+            for bad in ("yes", True, 1):
+                with self.assertRaises(SystemExit):
+                    undeclared_tool_calls_setting({"undeclared_tool_calls": bad})
+        finally:
+            os.environ.pop("STRATA_UNDECLARED_TOOL_CALLS", None)
+            if old is not None:
+                os.environ["STRATA_UNDECLARED_TOOL_CALLS"] = old
 
     def test_no_marker_when_nothing_was_rejected(self):
         """An ordinary answer and a declared call carry no extra field: the API is what it was."""
@@ -4791,6 +4726,29 @@ class ForcedToolChoice(unittest.TestCase):
         self.assertEqual(msg["strata_rejected_tool_calls"], [{"name": "bash", "reason": "undeclared"}])
         self.assertFalse([c for c in msg["content"] if c["type"] == "tool_use"])
 
+    def test_any_model_name_on_the_anthropic_route_is_the_loaded_model(self):
+        """#5312: Claude Desktop sends the model name `claude-5-5-sonnet` and cannot change it; the route serves the loaded model whatever
+        the request calls it, and answers with that model's name (the Desktop app's own gateway is a separate check in apps/host)."""
+        self.says("Hello there.")
+        for name in ("claude-5-5-sonnet", "claude-opus-4-1", "gpt-4o", "nonsense"):
+            for stream in (False, True):
+                with self.subTest(model=name, stream=stream):
+                    body = {"model": name, "max_tokens": 50, "stream": stream, "messages": [{"role": "user", "content": "hi"}],
+                            "tools": [{"name": "search", "description": "search", "input_schema": {"type": "object", "properties": {}}}]}
+                    req = urllib.request.Request(self.base + "/v1/messages", data=json.dumps(body).encode(),
+                                                 headers={"Content-Type": "application/json"})
+                    with urllib.request.urlopen(req, timeout=30) as r:
+                        raw = r.read().decode()
+                        self.assertEqual(r.status, 200)
+                    if stream:
+                        events = [json.loads(l[6:]) for l in raw.splitlines() if l.startswith("data: {")]
+                        self.assertEqual("".join(e["delta"]["text"] for e in events if e["type"] == "content_block_delta"), "Hello there.")
+                        self.assertEqual(events[0]["message"]["model"], self.svc.model)
+                    else:
+                        msg = json.loads(raw)
+                        self.assertEqual(msg["model"], self.svc.model)
+                        self.assertEqual(msg["content"][0]["text"], "Hello there.")
+
     def test_a_call_with_a_dropped_function_keyword_is_still_the_call(self):
         """#3441: `<=search>` for `<function=search>`, as a model under a large tool surface writes it."""
         from serve.frontend import CALL_END, CALL_START
@@ -4811,7 +4769,7 @@ class ForcedToolChoice(unittest.TestCase):
                     self.assertEqual((finish, calls), ("tool_calls", [("search", {"q": "2+2"})]))
                     self.assertEqual(reasoning, CallingEngine.THOUGHT)
                     first, second = self.engine.prompts
-                    opening = "<tool_call>\n<function=" + ("search>\n" if choice == self.NAMED else "")
+                    opening = "<tool_call>\n" + ("<function=search>\n" if choice == self.NAMED else "")
                     # where the thinking ended, after the blank line the template puts before a call
                     self.assertEqual(second, first + self.tok.encode(CallingEngine.THOUGHT + "</think>\n\n" + opening))
 
@@ -4820,7 +4778,7 @@ class ForcedToolChoice(unittest.TestCase):
         thought, calling = 'I will search for "2+2"', self.engine.generate
 
         def generate(ids, max_new, sampling, cancel, embeddings=None):
-            if self.tok.decode(ids).endswith(("<function=", "<function=search>\n")):
+            if self.tok.decode(ids).endswith(("<tool_call>\n", "<function=search>\n")):
                 yield from calling(ids, max_new, sampling, cancel)
                 return
             self.engine.prompts.append(list(ids))
@@ -4833,7 +4791,7 @@ class ForcedToolChoice(unittest.TestCase):
                 finish, calls, reasoning = self.call_of(code, b, stream)
                 self.assertEqual((finish, calls, reasoning), ("tool_calls", [("search", {"q": "2+2"})], thought))
                 first, second = self.engine.prompts
-                self.assertEqual(second, first + self.tok.encode(thought + "</think>\n\n<tool_call>\n<function="))
+                self.assertEqual(second, first + self.tok.encode(thought + "</think>\n\n<tool_call>\n"))
 
     def test_without_thinking_the_prompt_ends_with_the_opening(self):
         for choice in ("required", self.NAMED):
@@ -4844,7 +4802,7 @@ class ForcedToolChoice(unittest.TestCase):
                     finish, calls, reasoning = self.call_of(code, b, stream)
                     self.assertEqual((finish, calls, reasoning), ("tool_calls", [("search", {"q": "2+2"})], ""))
                     self.assertEqual(len(self.engine.prompts), 1)
-                    opening = "<tool_call>\n<function=" + ("search>\n" if choice == self.NAMED else "")
+                    opening = "<tool_call>\n" + ("<function=search>\n" if choice == self.NAMED else "")
                     self.assertTrue(self.tok.decode(self.engine.prompts[0]).endswith("</think>\n\n" + opening))
 
     def test_the_budget_wrap_up_opens_the_call(self):
@@ -4854,7 +4812,7 @@ class ForcedToolChoice(unittest.TestCase):
         self.assertEqual((finish, calls), ("tool_calls", [("search", {"q": "2+2"})]))
         self.assertEqual(reasoning, CallingEngine.THOUGHT[:20] + REASONING_WRAP_UP.split("</think>")[0])
         first, second = self.engine.prompts
-        extra = self.tok.encode(REASONING_WRAP_UP + "<tool_call>\n<function=", parse_special=True)
+        extra = self.tok.encode(REASONING_WRAP_UP + "<tool_call>\n", parse_special=True)
         self.assertEqual(second, first + self.tok.encode(CallingEngine.THOUGHT[:20]) + extra)
 
     def test_auto_absent_and_none_leave_the_tools_to_the_model(self):
