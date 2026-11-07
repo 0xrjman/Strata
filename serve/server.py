@@ -6256,6 +6256,7 @@ class Service:
                                  and "x-codex-turn-metadata" in meta) or bool(tools)
         parser = self.parser_cls(thinking=thinking, tools=with_history_tools(tools, sampling), stream_tools=True,
                                  recover=self.tool_call_recovery, declared_only=declared_only,
+                                 accept_undeclared=accept_undeclared,     # fork: a Codex turn / a tools-declaring request accepts undeclared names
                                  deferred=deferred or self.undeclared_tool_calls == "call")   # #4622: opt-in, as for a deferred tool
         detok, n, finish = Detokenizer(self.tok), 0, "length"
         run_tok, run_len, repeated = None, 0, False     # #606: the current run of one repeated token
