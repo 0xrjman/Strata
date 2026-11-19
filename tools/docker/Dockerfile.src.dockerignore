@@ -1,0 +1,39 @@
+# Keep the image to the source only: everything generated is re-created on
+# first start (inside the container or on the /terminal/data volume).
+.git
+# re-included: package_terminal.py reads `git rev-parse HEAD` of the source tree when --commit / STRATA_COMMIT
+# is absent or shorter than 40 hex, and a short `--build-arg STRATA_COMMIT=$(git rev-parse --short HEAD)` was fatal
+!.git
+
+# local Python environment (rebuilt in the image)
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# terminal/setup.py outputs and downloads (engine, packs, models, logs)
+/engine/
+/build/
+/build*/
+/dist/
+/packs/
+/mtp/
+/models/
+/Strata-data/
+# the folders tools/docker/entrypoint.sh creates in a mounted terminal/data/ (a link to llama.cpp, the models, the keys): never part of a build (#3644)
+/data/install/
+/data/state/
+/data/home/
+/data/Strata-data/
+third_party/llama.cpp/
+engine/third_party/*.zip
+*.done
+*.log
+strata-*.json
+strata-*.txt
+run-*.sh
+run-*.bat
+
+# the vendored pinned llama.cpp archive, so the build never reaches github.com (setup.py skips the download when the .done mark is there)
+!third_party/llama.cpp-3cf0325.zip
+!third_party/llama.cpp-3cf0325.zip.done
