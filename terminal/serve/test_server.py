@@ -5049,15 +5049,16 @@ class ForcedToolChoice(unittest.TestCase):
         guessed name); the marker names the closest declared tool as a hint.  A name close to nothing gets no hint."""
         tools = [{"type": "function", "function": {"name": n, "description": n, "parameters": {
             "type": "object", "properties": {"q": {"type": "string"}}}}} for n in ("read", "write", "search")]
-        for written, hint in (("read_file", "read"), ("Write", "write"), ("serch", "search"), ("execute_gdscript", None)):
+        # fork: accept_undeclared (intentional deviation) - a request that declares tools takes the call it wrote,
+        # under the name it wrote; nothing is guessed and no marker is sent.
+        for written in ("read_file", "Write", "serch", "execute_gdscript"):
             self.says(self._undeclared_call_answer(written))
             for stream in (False, True):
                 with self.subTest(written=written, stream=stream):
                     code, b = self.openai(stream=stream, tools=tools)
                     finish, calls, _ = self.call_of(code, b, stream)
-                    self.assertEqual((finish, calls), ("stop", []), b)
-                    want = {"name": written, "reason": "undeclared", **({"closest_declared": hint} if hint else {})}
-                    self.assertEqual(self._rejected_of(b, stream), [want])
+                    self.assertEqual((finish, calls), ("tool_calls", [(written, {"q": "2+2"})]), b)
+                    self.assertIsNone(self._rejected_of(b, stream))
 
     def test_closest_declared(self):
         from serve.server import closest_declared

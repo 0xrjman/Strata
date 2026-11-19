@@ -2489,7 +2489,7 @@ class OutputParser:
                             out.append(Event("content", self._track(self.buf[:j])))
                             self.buf = self.buf[j:]
                         return out
-                if self.schemas and not after.startswith(FUNC_START):
+                if (self.schemas or self.accept_undeclared) and not after.startswith(FUNC_START):
                     loose = self._loose_open(after)
                     if loose == "wait":                  # may still become one: held like a partial tag
                         j = i

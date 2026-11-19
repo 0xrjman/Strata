@@ -27,6 +27,11 @@ ARG BASE_IMAGE=ubuntu:24.04
 # ---- 1. the Terminal: the release archive, built here (pinned CPython 3.12 + hash-locked wheels, installed at build time only)
 FROM ${BASE_IMAGE} AS terminal
 ENV DEBIAN_FRONTEND=noninteractive
+# the daemon's systemd drop-in injects HTTP(S)_PROXY=127.0.0.1:7890 into build containers; clear it so apt/pip go direct
+ENV http_proxy= https_proxy= HTTP_PROXY= HTTPS_PROXY= no_proxy=*
+# USTC mirrors: the default Ubuntu/PyPI endpoints are slow from this box.
+RUN sed -i 's|http://archive.ubuntu.com/ubuntu|https://mirrors.ustc.edu.cn/ubuntu|g; s|http://security.ubuntu.com/ubuntu|https://mirrors.ustc.edu.cn/ubuntu|g' /etc/apt/sources.list.d/*.sources 2>/dev/null || true
+ENV PIP_INDEX_URL=https://mirrors.ustc.edu.cn/pypi/web/simple PIP_RETRIES=10 PIP_TIMEOUT=60
 RUN apt-get update \
  && apt-get install -y --no-install-recommends python3 ca-certificates \
  && rm -rf /var/lib/apt/lists/*

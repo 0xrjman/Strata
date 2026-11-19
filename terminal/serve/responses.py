@@ -37,6 +37,13 @@ ENCRYPTED_PREFIX = "strata.r1:"                   # our own reasoning replay str
 HOSTED_TOOLS = ("web_search", "web_search_preview", "file_search", "computer_use_preview", "computer_use",
                 "code_interpreter", "image_generation", "local_shell", "mcp", "tool_search")
 CLIENT_TOOL_SEARCH = "tool_search"                # the template name of a client-side tool_search (it has none)
+# A hosted tool the client runs is declarable: its names go into the declared set, so a call naming one binds.
+# `local_shell` is spelled by the model as exec / exec_command / apply_patch; a hosted `tool_search` names nothing
+# (only a client-executed one is declared, as CLIENT_TOOL_SEARCH).
+CLIENT_RUN_TOOLS = {"local_shell": ("exec", "exec_command", "apply_patch"), "web_search": ("web_search",),
+                    "file_search": ("file_search",), "computer_use": ("computer_use",),
+                    "code_interpreter": ("code_interpreter",), "image_generation": ("image_generation",)}
+FREEFORM_NAMES = {"apply_patch"}   # client-run names the model writes as a raw body, not as <parameter> tags
 CALL_ITEMS = ("function_call", "custom_tool_call", "tool_search_call")
 
 
@@ -299,19 +306,19 @@ def input_messages(req: dict) -> list[dict]:
             unanswered.discard(item.get("call_id"))
             if held and not unanswered:
                 flush_held()
-        elif kind == "agent_message":
-            message = {"role": "user", "content": _agent_message(item, param)}
-            open_turn = None
-            thinking.clear()
-            (held if unanswered else messages).append(message)
+        elif kind == "agent_message":                # Codex subagents: it has no role, it is the sending agent's own turn
+            content = _content(item.get("content"), param + ".content")
+            turn(content if isinstance(content, str) else "".join(
+                p.get("text", "") for p in content if p.get("type") == "text"))
         elif kind == "additional_tools":
             continue                                 # #782 (Codex): tools the client adds as an input item; see request_tools
         elif kind == "item_reference":
             raise ResponsesError("item references need stored responses, and this server keeps none: send the items "
                                  "themselves", param, "unsupported_parameter")
-        else:
-            raise ResponsesError(f"input items of type {kind!r} are not supported", param + ".type",
-                                 "unsupported_parameter")
+        elif kind is None:
+            raise ResponsesError("expected an input item with a type", param)
+        else:                                              # Codex-only item types (agent_status, collab_*, hosted tool calls): no place in the chat template, drop them
+            continue
     flush_held()
     _order_tool_results(messages)
     searched = set()                                 # what earlier searches declared, in the order the model reads
@@ -378,12 +385,16 @@ def _declare(tool, param, tools, names, namespace=None, ns_description=""):
 def _declare_tools(given, prefix, tools, names, skipped, ns_descriptions=None):
     """A `tools` array (the request's, or what a tool search found) -> declarations; hosted tools go to `skipped`.
     A namespace's description starts each of its tools' descriptions, unless `ns_descriptions` collects it
-    ({namespace: description}) to be said once."""
+    ({namespace: description}) to be said once.  -> names of the hosted tools the client runs (see CLIENT_RUN_TOOLS)."""
+    client_run = []
     for i, tool in enumerate(given):
         param = f"{prefix}[{i}]"
         if not isinstance(tool, dict):
             raise ResponsesError("expected a tool object", param)
         kind = tool.get("type")
+        # a Codex `mcp` entry naming its server's tools is a namespace tool the client runs; the hosted one (no `tools`) stays out
+        if kind == "mcp" and isinstance(tool.get("tools"), list):
+            kind = "namespace"
         if kind in ("function", "custom"):
             _declare(tool, param, tools, names)
         elif kind == "namespace":
@@ -402,9 +413,13 @@ def _declare_tools(given, prefix, tools, names, skipped, ns_descriptions=None):
             if CLIENT_TOOL_SEARCH not in names:
                 _declare(tool, param, tools, names)
         elif kind in HOSTED_TOOLS or isinstance(kind, str):
-            skipped.append(kind)                     # the model cannot run OpenAI's hosted tools: left out
+            if kind in CLIENT_RUN_TOOLS:
+                client_run.append(kind)              # the client runs it: request_tools declares the names it writes with
+            else:
+                skipped.append(kind)                 # the model cannot run it and it names nothing: left out
         else:
             raise ResponsesError("a tool needs a type", param + ".type")
+    return client_run
 
 
 def request_tools(req: dict):
@@ -418,7 +433,16 @@ def request_tools(req: dict):
     extra = [t for item in (req.get("input") if isinstance(req.get("input"), list) else [])
              if isinstance(item, dict) and item.get("type") == "additional_tools" and isinstance(item.get("tools"), list)
              for t in item["tools"]]
-    _declare_tools(list(given) + extra, "tools", tools, names, skipped)
+    client_run = _declare_tools(list(given) + extra, "tools", tools, names, skipped)
+    # declared after the request's own tools, so a request that names one of these keeps its own definition.
+    # A Codex client runs its own tools, so its vocabulary is declarable: Codex sends a request without `local_shell`.
+    # Only a Codex turn that is not a compaction: a compaction's prompt must stay byte-identical, so it declares none.
+    for kind in client_run + (["local_shell"] if (body := _turn_body(req)) is not None
+                              and body.get("request_kind") != "compaction" else []):
+        for name in CLIENT_RUN_TOOLS[kind]:
+            if name not in names:
+                _declare({"type": "custom" if name in FREEFORM_NAMES else "function", "name": name}, "tools",
+                         tools, names)
     choice = req.get("tool_choice")
     if choice == "none":
         return None, names, skipped

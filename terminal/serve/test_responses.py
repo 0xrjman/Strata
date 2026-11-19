@@ -1066,20 +1066,22 @@ class ForcedToolChoice(Server):
                 self.assertEqual(r["status"], "completed")
                 self.assertEqual([(o["type"], o["status"], o.get("arguments")) for o in r["output"]],
                                  [("function_call", "incomplete", "{")])
-        self.engine.first_name = "nosuch"            # "required": a name that is no tool is text, which a format refuses
+        self.engine.first_name = "nosuch"
+        # fork: accept_undeclared (intentional deviation) - a name the request never offered is a call, not text
         r = self.final(self.request(tool_choice="required", **self.NO_THINKING))
-        self.assertEqual([o["type"] for o in r["output"]], ["message"])
+        self.assertEqual([(o["type"], o.get("name")) for o in r["output"]], [("function_call", "nosuch")])
         code, r = self.post(self.request(tool_choice="required", **fmt, **self.NO_THINKING))
-        self.assertEqual((code, r["error"]["code"]), (502, "structured_output_failed"))
+        self.assertEqual(code, 200, r)
+        self.assertEqual([(o["type"], o.get("name")) for o in r["output"]], [("function_call", "nosuch")])
         self.svc.engine = MockEngine(self.tok, "Still thinking", max_context=16384)   # the reply ends inside the thinking
         r = self.final(self.request(tool_choice=self.NAMED))
         self.assertEqual([o["type"] for o in r["output"]], ["reasoning"])
 
     def test_a_name_the_request_never_offered_stays_text(self):
+        # fork: accept_undeclared (intentional deviation) - the call binds under the name the model wrote
         self.engine.first_name = "nosuch"
         r = self.final(self.request(tool_choice="required", **self.NO_THINKING))
-        self.assertEqual([o["type"] for o in r["output"]], ["message"])
-        self.assertIn("<function=nosuch>", r["output"][0]["content"][0]["text"])
+        self.assertEqual([(o["type"], o.get("name")) for o in r["output"]], [("function_call", "nosuch")])
 
     def test_auto_absent_and_none_leave_the_tools_to_the_model(self):
         for extra in ({}, {"tool_choice": "auto"}, {"tool_choice": "none"}):
@@ -1101,14 +1103,21 @@ class ForcedToolChoice(Server):
                       {"tool_choice": "sometimes"}, {"tool_choice": allowed},
                       {"tool_choice": {"type": "custom", "name": "other"}},
                       {"tool_choice": {"type": "function", "name": "read"}, "tools": space},
-                      {"tool_choice": "required", "tools": []},
-                      {"tool_choice": "required", "tools": [{"type": "web_search"}]}):
+                      {"tool_choice": "required", "tools": []}):
             with self.subTest(extra=extra):
                 log = io.StringIO()
                 code, r = self.post(self.request(**{**extra, **self.NO_THINKING}), log=log)
                 self.assertEqual(code, 200, r)
                 self.assertEqual([o["type"] for o in r["output"]], ["message"])
                 self.assertEqual(log.getvalue().count("[strata] tool_choice"), 1, log.getvalue())
+        # fork: accept_undeclared (intentional deviation) - a hosted `web_search` is declared under its own name, so
+        # "required" is honourable: the call opens and the choice is not logged as odd.
+        log = io.StringIO()
+        code, r = self.post(self.request(tool_choice="required", tools=[{"type": "web_search"}],
+                                          **self.NO_THINKING), log=log)
+        self.assertEqual(code, 200, r)
+        self.assertEqual([o["type"] for o in r["output"]], ["function_call"])
+        self.assertEqual(log.getvalue().count("[strata] tool_choice"), 0, log.getvalue())
 
     def test_a_too_long_compaction_prompt_keeps_the_force_on_its_second_try(self):
         """The fallback of #924 renders the request again: the opening must be in that prompt too."""
