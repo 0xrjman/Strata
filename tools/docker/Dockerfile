@@ -30,12 +30,17 @@ ENV DEBIAN_FRONTEND=noninteractive
 # the daemon's systemd drop-in injects HTTP(S)_PROXY=127.0.0.1:7890 into build containers; clear it so apt/pip go direct
 ENV http_proxy= https_proxy= HTTP_PROXY= HTTPS_PROXY= no_proxy=*
 # USTC mirrors: the default Ubuntu/PyPI endpoints are slow from this box.
-RUN sed -i 's|http://archive.ubuntu.com/ubuntu|https://mirrors.ustc.edu.cn/ubuntu|g; s|http://security.ubuntu.com/ubuntu|https://mirrors.ustc.edu.cn/ubuntu|g' /etc/apt/sources.list.d/*.sources 2>/dev/null || true
+# ca-certificates first from the shipped http sources: the load-made base image has no system CA, https apt needs it.
 ENV PIP_INDEX_URL=https://mirrors.ustc.edu.cn/pypi/web/simple PIP_RETRIES=10 PIP_TIMEOUT=60
 RUN apt-get update \
- && apt-get install -y --no-install-recommends python3 ca-certificates \
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && sed -i 's|http://archive.ubuntu.com/ubuntu|https://mirrors.ustc.edu.cn/ubuntu|g; s|http://security.ubuntu.com/ubuntu|https://mirrors.ustc.edu.cn/ubuntu|g' /etc/apt/sources.list.d/*.sources 2>/dev/null || true \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends python3 \
  && rm -rf /var/lib/apt/lists/*
 COPY terminal-src/ /src/
+# seeded pinned CPython (packaging/cache): github release downloads are not reachable from this box; fetch_python uses the cache when present
+COPY terminal-src/packaging/cache/ /cache/
 # the sources have no .git here (and the image has no git): build.sh passes the commit they are from, package_terminal.py writes it to COMMIT
 ARG STRATA_COMMIT=
 ENV STRATA_BUILD_COMMIT=${STRATA_COMMIT}
