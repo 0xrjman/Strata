@@ -121,6 +121,8 @@ class Parsing(unittest.TestCase):
             input_messages({})
 
     def test_codex_subagent_items(self):
+        # upstream #4210/#5244: an agent_message is a user message with an attribution header; Codex's own
+        # "Message Type" header is kept as written; a payload sealed by another server is named, not passed off as text
         msgs = input_messages({"input": [
             {"role": "user", "content": "go"},
             {"type": "agent_message", "id": "amsg_1", "author": "/root/repo_state", "recipient": "/root",
@@ -128,7 +130,22 @@ class Parsing(unittest.TestCase):
             {"type": "web_search_call", "action": {"type": "search"}},
             {"type": "agent_status", "status": "idle"}]})
         self.assertEqual(msgs, [{"role": "user", "content": "go"},
-                                {"role": "assistant", "content": "Payload:\ndone."}])
+                                {"role": "user", "content": "Message from /root/repo_state to /root:\nPayload:\ndone."}])
+        header = "Message Type: final\nSender: /root/worker\nPayload:\ndone."
+        self.assertEqual(input_messages({"input": [{"type": "agent_message", "content": header}]})[0]["content"], header)
+        cipher = input_messages({"input": [{"type": "agent_message", "author": "w", "recipient": "me", "content": [
+            {"type": "encrypted_content", "encrypted_content": "gAAAAAB" + "A" * 80}]}]})[0]["content"]
+        self.assertEqual(cipher, "Message from w to me:\n" + responses._UNREADABLE_PAYLOAD)
+        # and it closes the model turn it lands in: the call before it stays one assistant message, the call
+        # after it starts the next, and thinking opened before it is not carried into that new turn
+        msgs = input_messages({"input": [
+            {"type": "function_call", "call_id": "c1", "name": "Bash", "arguments": "{}"},
+            {"type": "reasoning", "content": [{"type": "reasoning_text", "text": "hmm"}]},
+            {"type": "agent_message", "author": "w", "recipient": "me", "content": "ok"},
+            {"type": "function_call", "call_id": "c2", "name": "Bash", "arguments": "{}"}]})
+        self.assertEqual(msgs[1], {"role": "user", "content": "Message from w to me:\nok"})
+        self.assertEqual([(m.get("reasoning_content"), [c["function"]["name"] for c in m.get("tool_calls", [])])
+                         for m in msgs if m["role"] == "assistant"], [(None, ["Bash"]), (None, ["Bash"])])
 
     def test_tools_namespaces_custom_and_hosted(self):
         tools, names, skipped = request_tools({"tools": [

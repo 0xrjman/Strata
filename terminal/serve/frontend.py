@@ -1746,7 +1746,7 @@ def parse_tool_call(body: str, schema: dict | None = None, notes: list | None = 
         raise ValueError("malformed tool call: no readable parameter: " + body[:80])
     if recover and unwrap_arguments(args, props):
         args = args["arguments"]
-    return ToolCall(name=name, arguments=args)
+    return ToolCall(name=name, arguments=args, raw=raw)
 
 
 def unwrap_arguments(args: dict, props: dict) -> bool:
@@ -1785,14 +1785,10 @@ class OutputParser:
         # namespace=member (Qwen writes the <function= tag's equals sign into the name),
         # namespace_member (one underscore dropped), and the bare member when exactly one
         # declared tool has it. Only an unambiguous alias counts, and an exactly declared
-        # name always wins over an alias.  The `functions.` (Harmony) and `tools.` (Codex's custom
-        # tools) prefixes name the same tool: <prefix><name> resolves to the declared <name>,
-        # dotted or with double underscore.
+        # name always wins over an alias.
         aliases = {}
         for name in self.schemas:
-            if not isinstance(name, str):
-                continue
-            if "." in name:
+            if isinstance(name, str) and "." in name:
                 namespace, member = name.rsplit(".", 1)
                 for alias in (f"{namespace}__{member}", f"{namespace}={member}",
                               f"{namespace}_{member}", member):
@@ -2722,6 +2718,23 @@ class OutputParser:
                     else:
                         self.buf = self.buf[:p] + CALL_START + "\n" + self.buf[p:]
                     continue
+                lp, lname, lozen, lend = self._loose_bare() if self.accept_undeclared else (-1, "", 0, -1)
+                if lp >= 0 and (i < 0 or lp < i):
+                    # A Codex turn's `<apply_patch> … </apply_patch>` written with no wrapper at all: the same call,
+                    # rewritten into the envelope the rest of the parser reads.  Held until its close has arrived.
+                    j = lp
+                    while j > 0 and self.buf[j - 1] == "\n":
+                        j -= 1
+                    if j > 0:
+                        out.append(Event("content", self._track(self.buf[:j])))
+                    self.buf = self.buf[j:]
+                    lp, lend = lp - j, (lend - j) if lend >= 0 else -1
+                    if lend < 0:
+                        return out                        # the close is still arriving: held like a partial tag
+                    close = f"</{lname}>"
+                    self.buf = (CALL_START + "\n" + FUNC_START + lname + ">" + self.buf[lp + lozen:lend]
+                                + FUNC_END + CALL_END + self.buf[lend + len(close):])
+                    continue
                 if i < 0:
                     # Hold a partial tag AND the newlines before it: if a tool call follows, they are dropped,
                     # so emitting them early would make streamed and whole outputs differ.
@@ -3054,9 +3067,11 @@ class JsonOutputParser(OutputParser):
     not the server's tool_call_recovery is on.  Everything else (reasoning, code fences, declared-tool rules) is OutputParser's."""
 
     def __init__(self, thinking: bool = True, tools: list[dict] | None = None, stream_tools: bool = False,
-                 recover: bool = False, declared_only: bool = False, deferred: bool = False):
+                 recover: bool = False, declared_only: bool = False, deferred: bool = False, **base):
+        # **base: server.py builds parser_cls with OutputParser's whole kwarg set (accept_undeclared among them), and
+        # a shape parser that copies the base signature misses every kwarg added later - a TypeError on the first request.
         super().__init__(thinking=thinking, tools=tools, stream_tools=stream_tools, recover=True,
-                         declared_only=declared_only, deferred=deferred)
+                         declared_only=declared_only, deferred=deferred, **base)
 
 
 class Hy4OutputParser(OutputParser):
@@ -3065,9 +3080,9 @@ class Hy4OutputParser(OutputParser):
     OutputParser's.  A call is in the declared-tool form once translated, so the recovery that reads a drifted opener is on, as for the JSON form."""
 
     def __init__(self, thinking: bool = True, tools: list[dict] | None = None, stream_tools: bool = False,
-                 recover: bool = False, declared_only: bool = False, deferred: bool = False):
+                 recover: bool = False, declared_only: bool = False, deferred: bool = False, **base):
         super().__init__(thinking=thinking, tools=tools, stream_tools=stream_tools, recover=recover,
-                         declared_only=declared_only, deferred=deferred)
+                         declared_only=declared_only, deferred=deferred, **base)
         from serve import hy4_dialect
         self._dialect = hy4_dialect.Hy4Dialect()
 
@@ -3087,9 +3102,9 @@ class InklingOutputParser(JsonOutputParser):
     so `reasoning_effort=none`, interleaved thinking, and direct tool calls all parse cleanly."""
 
     def __init__(self, thinking: bool = True, tools: list[dict] | None = None, stream_tools: bool = False,
-                 recover: bool = False, declared_only: bool = False, deferred: bool = False):
+                 recover: bool = False, declared_only: bool = False, deferred: bool = False, **base):
         super().__init__(thinking=False, tools=tools, stream_tools=stream_tools, recover=True,
-                         declared_only=declared_only, deferred=deferred)
+                         declared_only=declared_only, deferred=deferred, **base)
         from serve import inkling_dialect
         self._dialect = inkling_dialect.InklingDialect()
 

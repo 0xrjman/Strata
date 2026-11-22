@@ -74,3 +74,16 @@ def test_tokenizer_from_hf_o200k(tmp_path: Path):
     tok = Tokenizer.from_hf(hf_dir)
     assert tok.special_ids.get("tokenizer.ggml.eos_token_id") == 10
     assert tok.decode(tok.encode("hello")) == "hello"
+
+
+def test_every_shape_parser_takes_the_server_parser_kwargs():
+    """server.py builds parser_cls with OutputParser's whole kwarg set, accept_undeclared (the fork's Codex/tools
+    rule) among them: a shape parser whose __init__ copies the base signature crashes the stream.  The kwargs below
+    are the server.py:5397 call."""
+    from serve.frontend import Hy4OutputParser, InklingOutputParser, JsonOutputParser, OutputParser
+
+    kwargs = dict(thinking=True, tools=[{"name": "read_file", "parameters": {"type": "object"}}],
+                  stream_tools=True, recover=True, declared_only=False, accept_undeclared=True, deferred=False)
+    for cls in (OutputParser, JsonOutputParser, Hy4OutputParser, InklingOutputParser):
+        parser = cls(**kwargs)
+        assert parser.accept_undeclared is True, cls.__name__

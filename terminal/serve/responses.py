@@ -306,10 +306,11 @@ def input_messages(req: dict) -> list[dict]:
             unanswered.discard(item.get("call_id"))
             if held and not unanswered:
                 flush_held()
-        elif kind == "agent_message":                # Codex subagents: it has no role, it is the sending agent's own turn
-            content = _content(item.get("content"), param + ".content")
-            turn(content if isinstance(content, str) else "".join(
-                p.get("text", "") for p in content if p.get("type") == "text"))
+        elif kind == "agent_message":
+            message = {"role": "user", "content": _agent_message(item, param)}
+            open_turn = None
+            thinking.clear()
+            (held if unanswered else messages).append(message)
         elif kind == "additional_tools":
             continue                                 # #782 (Codex): tools the client adds as an input item; see request_tools
         elif kind == "item_reference":
