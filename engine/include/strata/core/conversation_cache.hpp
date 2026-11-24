@@ -571,7 +571,8 @@ public:
             for (const auto& c : e.checkpoints)
                 if (!deepest || c.ids.size() > deepest->ids.size()) deepest = &c;
             if (e.cvec == cvec && !(guarded_ != 0 && serials_[i] == guarded_) &&
-                ((deepest && !deepest->ids.empty() && held(*deepest)) || live_extended_by(e, ids, images))) {
+                ((deepest && !deepest->ids.empty() && held(*deepest) && e.live.ids.size() <= out_max) ||
+                 live_extended_by(e, ids, images))) {
                 if (dropped_tokens) dropped_tokens->push_back(e.live.ids.size());
                 bytes_ -= e.bytes();
                 erase(i);
@@ -597,14 +598,16 @@ public:
                 if (k.ids == c.ids && k.imgs == c.imgs) return true;
             return false;
         };
+        size_t out_max = ids.size();
+        for (const auto& k : checkpoints) out_max = std::max(out_max, k.ids.size());
         for (size_t i = 0; i < entries_.size(); ++i) {
             const auto& e = entries_[i];
             const ConversationCheckpoint* deepest = nullptr;
             for (const auto& c : e.checkpoints)
                 if (!deepest || c.ids.size() > deepest->ids.size()) deepest = &c;
-            if (e.cvec != cvec || !deepest || deepest->ids.empty() || !held(*deepest) ||
-                (guarded_ != 0 && serials_[i] == guarded_))
-                continue;
+            if (e.cvec != cvec || (guarded_ != 0 && serials_[i] == guarded_)) continue;
+            bool holds = deepest && !deepest->ids.empty() && held(*deepest) && e.live.ids.size() <= out_max;
+            if (!holds && !live_extended_by(e, ids, images)) continue;
             for (const auto& c : e.checkpoints)
                 if (!held(c)) return true;
         }
@@ -628,7 +631,7 @@ public:
             bool holds = deepest && !deepest->ids.empty() && deepest->ids == ids && deepest->imgs == images;
             for (const auto& k : checkpoints)
                 if (deepest && !deepest->ids.empty() && !holds && k.ids == deepest->ids && k.imgs == deepest->imgs) holds = true;
-            if (holds) longest = std::max(longest, deepest->ids.size());
+            if (holds && e.live.ids.size() <= out_max) longest = std::max(longest, deepest->ids.size());
             else if (live_extended_by(e, ids, images)) longest = std::max(longest, e.live.ids.size());   // (no checkpoint chain to report)
         }
         return longest;
