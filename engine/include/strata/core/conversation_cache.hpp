@@ -528,16 +528,34 @@ public:
     size_t slots() const { return slots_; }
 
     // #342: drop the parked entries an outgoing conversation (its live tokens and checkpoint chain) supersedes:
-    // the same conversation a turn back, whose DEEPEST checkpoint the outgoing chain still holds and whose own
-    // live is no deeper than that chain, so all it adds is the tail the client rewrote (the reply as it was
-    // generated, before the next request re-rendered it) and checkpoints older than that one.  A subagent's
-    // successive turns parked one such copy each, and make_room's oldest-first eviction then pushed the parent
-    // conversation out after `slots` turns.  An entry without checkpoints, of the other steering mode, whose
-    // deepest checkpoint the outgoing chain does not hold (another conversation that only shares the system
-    // prompt's root with it), or whose live reaches past everything the outgoing chain holds (a branch the
-    // outgoing conversation cannot reproduce) is kept.  Returns how many were dropped.
+    // the same conversation a turn back, whose DEEPEST checkpoint the outgoing chain still holds, so all it adds
+    // is the tail the client rewrote (the reply as it was generated, before the next request re-rendered it) and
+    // checkpoints older than that one.  A subagent's successive turns parked one such copy each, and make_room's
+    // oldest-first eviction then pushed the parent conversation out after `slots` turns.  An entry without
+    // checkpoints, or whose deepest checkpoint the outgoing chain does not hold (another conversation that only
+    // shares the system prompt's root with it), is kept.  Returns how many were dropped.
+    // An entry whose LIVE tokens are a prefix of (or equal to) `ids` (same pictures, same steering, no pinned shared
+    // prefix) is superseded as well: the conversation only appends, so the longer snapshot serves every resume the older
+    // one could.  Without this the older snapshots of a long agent conversation (whose deepest checkpoint the new chain
+    // does not hold) were evicted oldest-first and spilled to the SSD tier, one whole snapshot per turn, for nothing.
+    // `dropped_tokens`, when given, receives the token count of each dropped entry.
+    bool live_extended_by(const SavedConversation& e, const std::vector<int32_t>& ids,
+                          const std::vector<ConversationImageKey>& images) const {
+        const size_t n = e.live.ids.size();
+        if (n == 0 || n > ids.size() || e.pinned() || !std::equal(e.live.ids.begin(), e.live.ids.end(), ids.begin())) return false;
+        size_t within = 0;
+        for (const auto& m : images) if (m.start < (int64_t) n) ++within;
+        if (within != e.live.imgs.size()) return false;
+        for (const auto& k : e.live.imgs) {
+            bool found = false;
+            for (const auto& m : images) if (m == k) { found = true; break; }
+            if (!found) return false;
+        }
+        return true;
+    }
     size_t drop_superseded(const std::vector<int32_t>& ids, const std::vector<ConversationImageKey>& images,
-                           const std::vector<ConversationCheckpoint>& checkpoints, bool cvec) {
+                           const std::vector<ConversationCheckpoint>& checkpoints, bool cvec,
+                           std::vector<size_t>* dropped_tokens = nullptr) {
         auto held = [&](const ConversationCheckpoint& c) {
             if (c.ids == ids && c.imgs == images) return true;
             for (const auto& k : checkpoints)
@@ -552,9 +570,9 @@ public:
             const ConversationCheckpoint* deepest = nullptr;
             for (const auto& c : e.checkpoints)
                 if (!deepest || c.ids.size() > deepest->ids.size()) deepest = &c;
-            if (e.cvec == cvec && deepest && !deepest->ids.empty() && held(*deepest) &&
-                e.live.ids.size() <= out_max &&               // live deeper than anything the chain holds is a branch, not a stale copy
-                !(guarded_ != 0 && serials_[i] == guarded_)) {
+            if (e.cvec == cvec && !(guarded_ != 0 && serials_[i] == guarded_) &&
+                ((deepest && !deepest->ids.empty() && held(*deepest)) || live_extended_by(e, ids, images))) {
+                if (dropped_tokens) dropped_tokens->push_back(e.live.ids.size());
                 bytes_ -= e.bytes();
                 erase(i);
                 ++dropped;
@@ -607,11 +625,11 @@ public:
             const ConversationCheckpoint* deepest = nullptr;
             for (const auto& c : e.checkpoints)
                 if (!deepest || c.ids.size() > deepest->ids.size()) deepest = &c;
-            if (!deepest || deepest->ids.empty()) continue;
-            bool holds = deepest->ids == ids && deepest->imgs == images;
+            bool holds = deepest && !deepest->ids.empty() && deepest->ids == ids && deepest->imgs == images;
             for (const auto& k : checkpoints)
-                if (!holds && k.ids == deepest->ids && k.imgs == deepest->imgs) holds = true;
-            if (holds && e.live.ids.size() <= out_max) longest = std::max(longest, deepest->ids.size());
+                if (deepest && !deepest->ids.empty() && !holds && k.ids == deepest->ids && k.imgs == deepest->imgs) holds = true;
+            if (holds) longest = std::max(longest, deepest->ids.size());
+            else if (live_extended_by(e, ids, images)) longest = std::max(longest, e.live.ids.size());   // (no checkpoint chain to report)
         }
         return longest;
     }
