@@ -60,7 +60,6 @@ ARG BUILD_VISION=1
 ARG BUILD_HY4=1
 ARG BUILD_INKLING=1
 ARG ENGINE_VERSION=
-RUN python3 -m venv /venv && /venv/bin/pip install --no-cache-dir -r terminal/requirements.txt -r terminal/requirements-build.txt
 # ggml comes from the vendored engine/third_party/strata-ggml; strata-vision is Strata's own reader (terminal/tools/vision/own): nothing is downloaded
 RUN set -e; \
     real=""; for a in $(echo "$CUDA_ARCHITECTURES" | tr ';,' '  '); do real="$real;${a}-real"; done; real=${real#;}; \
@@ -134,7 +133,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PIP_INDEX_URL=https://mirrors.ustc.edu.cn/pypi/web/simple PIP_RETRIES=10 PIP_TIMEOUT=60
 RUN apt-get update && apt-get install -y --no-install-recommends python3 ca-certificates git && rm -rf /var/lib/apt/lists/*
 COPY . /src/
-RUN python3 /src/tools/packaging/package_terminal.py --out /out --cache /cache \
+RUN python3 /src/tools/packaging/package_terminal.py --out /out --cache /src/packaging/cache \
  && mkdir -p /opt/strata \
  && tar -xzf /out/strata-terminal-*-linux-x86_64.tar.gz -C /opt/strata \
  && mv /opt/strata/strata-terminal-* /opt/strata/terminal \

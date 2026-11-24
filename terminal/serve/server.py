@@ -5843,7 +5843,7 @@ class Service:
         return now
 
     def run(self, ids, thinking, tools, max_new, sampling, cancel, force=None,
-            declared_only=False, deferred=False) -> Iterator[tuple[str, object]]:
+            declared_only=False, deferred=False, codex_turn=False) -> Iterator[tuple[str, object]]:
         """The request's events (see _run); with "prevent_sleep" in the config, the PC stays awake while it runs or waits."""
         ka = self.keep_awake
         if ka is not None:
@@ -5859,7 +5859,7 @@ class Service:
                 gate.acquire(getattr(cancel, "_strata_key", None), cancel=cancel,
                              deadline=None if self.queue_timeout_s is None else time.monotonic() + self.queue_timeout_s)
                 counted = True
-            yield from self._run(ids, thinking, tools, max_new, sampling, cancel, force, declared_only, deferred)
+            yield from self._run(ids, thinking, tools, max_new, sampling, cancel, force, declared_only, deferred, codex_turn)
         finally:
             if counted:
                 gate.release(getattr(cancel, "_strata_key", None))
@@ -5867,7 +5867,7 @@ class Service:
                 ka.release()
 
     def _run(self, ids, thinking, tools, max_new, sampling, cancel, force=None,
-             declared_only=False, deferred=False) -> Iterator[tuple[str, object]]:
+             declared_only=False, deferred=False, codex_turn=False) -> Iterator[tuple[str, object]]:
         """Yields ("event", Event) as text arrives, then ("done", {"finish": .., "completion_tokens": ..}).
         `force` (forced_call): the opening of the call the reply must make - see prepare()."""
         # the model card's sampling for this thinking state, then the config's block, then the Chat settings shared with
@@ -5908,14 +5908,9 @@ class Service:
                     print(f"[strata] thinking capped at {max_new - reserve} of max_tokens {max_new} to leave room for "
                           f"the answer (budget {budget})", flush=True)
                 budget = max(1, max_new - reserve)
-        meta = sampling.get("client_metadata") if isinstance(sampling, dict) else None
-        # A request that declares tools has its real vocabulary in the prompt (DeepSeek Harness, Codex-style harnesses):
-        # a call naming a tool outside `tools` is the call, not text the client takes for the end of the turn.
-        accept_undeclared = bool(isinstance(sampling, dict) and isinstance(meta, dict)
-                                 and "x-codex-turn-metadata" in meta) or bool(tools)
         parser = self.parser_cls(thinking=thinking, tools=with_history_tools(tools, sampling), stream_tools=True,
                                  recover=self.tool_call_recovery, declared_only=declared_only,
-                                 accept_undeclared=accept_undeclared,     # fork: a Codex turn / a tools-declaring request accepts undeclared names
+                                 accept_undeclared=codex_turn,
                                  deferred=deferred or self.undeclared_tool_calls == "call")   # #4622: opt-in, as for a deferred tool
         inkling_special_ids = None
         if self.inkling and hasattr(parser, "feed_token"):
@@ -6368,7 +6363,7 @@ class Service:
                                     parser = self.parser_cls(thinking=False, tools=with_history_tools(tools, sampling),
                                                              stream_tools=True, recover=self.tool_call_recovery,
                                                              declared_only=declared_only,
-                                                             accept_undeclared=accept_undeclared,
+                                                             accept_undeclared=codex_turn,
                                                              deferred=deferred or self.undeclared_tool_calls == "call")
                                     detok, tail, parser_done, force, budget = Detokenizer(self.tok), "", False, None, None
                                     if forced_text:     # a forced call (tool_choice): its opening again, read as
@@ -8356,7 +8351,9 @@ def make_handler(svc: Service):
             def events():
                 yield from asm.start()
                 done = None
-                for kind, x in svc.run(ids, thinking, tools, max_new, req, cancel, force):
+                request_kind, conversation = responses_api._codex_turn(req)
+                codex_turn = request_kind == "turn" and conversation is not None and req.get("tool_choice") != "none"
+                for kind, x in svc.run(ids, thinking, tools, max_new, req, cancel, force, codex_turn=codex_turn):
                     if kind == "ping":
                         yield None
                     elif kind == "event":

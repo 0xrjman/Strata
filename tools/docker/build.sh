@@ -80,6 +80,12 @@ else
   tar -cf - --exclude='__pycache__' $paths $tools_py | tar -xf - -C "$ctx/terminal-src"
 fi
 
+for archive in packaging/cache/cpython-*-x86_64-unknown-linux-gnu-install_only.tar.gz; do
+  [ -f "$archive" ] || continue
+  mkdir -p "$ctx/terminal-src/packaging/cache"
+  cp "$archive" "$ctx/terminal-src/packaging/cache/"
+done
+
 # 2. the engine package(s): hard-linked when on the same file system (no second copy of GBs), copied otherwise
 for e in $engines; do
   [ -f "$e/engine-component.json" ] || { echo "build.sh: $e has no engine-component.json (give the package folder)" >&2; exit 2; }

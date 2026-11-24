@@ -956,6 +956,7 @@ FUNC_END = "</function>"
 # #3441: the opener a model writes when it drifts by a token inside the envelope the template documents:
 # `<=NAME>` (the word `function` dropped), `<function:NAME>`, `<function =NAME>`, or the bare `<NAME>`
 _LOOSE_OPEN = re.compile(r"<\s*(?:function\s*[=:]\s*|=\s*)?([A-Za-z0-9_.\-]+)\s*>")
+_BARE_TOOL_OPEN = re.compile(r"<([A-Za-z0-9_.\-]+)>")
 # A live Pi turn omitted only the opening angle bracket: `function=write>`.
 # Recovery accepts it only immediately inside an explicit wrapper and only for
 # a declared tool; the ordinary content path never scans for this spelling.
@@ -1911,23 +1912,22 @@ class OutputParser:
         return None
 
     def _loose_bare(self) -> tuple[int, str, int, int]:
-        """accept_undeclared (a Codex turn): the first `<NAME> … </NAME>` written in the answer without the
-        `<tool_call>` wrapper -> (position, name, length of the opener, position of the `</NAME>`); -1 as the close
-        while the close has not arrived.  (-1, "", 0, -1) for none.  The same `_callable` test as `_loose_open`.
-        ponytail: scans every `<` of the unflushed tail; tails stay short, widen it if a profile says otherwise."""
+        """The first Codex tool written as a bare tag, or the start of an incomplete one."""
         p = self.buf.find("<")
         held = (-1, "", 0, -1)
         while p >= 0:
-            loose = self._loose_open(self.buf[p:])
-            if loose is not None and self._ok_at(p):
-                if loose == "wait":
-                    held = (p, "", 0, -1) if held[0] < 0 else held
-                    break
-                end = self.buf.find(f"</{loose[0]}>", p + loose[1])
+            after = self.buf[p:]
+            m = _BARE_TOOL_OPEN.match(after)
+            if m and m[1] in self.schemas and self._ok_at(p):
+                name = m[1]
+                end = self.buf.find(f"</{name}>", p + m.end())
                 if end >= 0:
-                    return p, loose[0], loose[1], end
+                    return p, name, m.end(), end
                 if held[0] < 0:
-                    held = (p, loose[0], loose[1], -1)
+                    held = (p, name, m.end(), -1)
+            elif not m and any(name.startswith(after[1:]) for name in self.schemas if isinstance(name, str)):
+                if self._ok_at(p) and held[0] < 0:
+                    held = (p, "", 0, -1)
             p = self.buf.find("<", p + 1)
         return held
 
@@ -2735,7 +2735,7 @@ class OutputParser:
                     else:
                         self.buf = self.buf[:p] + CALL_START + "\n" + self.buf[p:]
                     continue
-                lp, lname, lozen, lend = self._loose_bare() if self.accept_undeclared else (-1, "", 0, -1)
+                lp, lname, lozen, lend = self._loose_bare() if self.accept_undeclared and self.schemas else (-1, "", 0, -1)
                 if lp >= 0 and (i < 0 or lp < i):
                     # A Codex turn's `<apply_patch> … </apply_patch>` written with no wrapper at all: the same call,
                     # rewritten into the envelope the rest of the parser reads.  Held until its close has arrived.

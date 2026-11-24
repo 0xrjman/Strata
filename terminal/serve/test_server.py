@@ -5213,15 +5213,13 @@ class ForcedToolChoice(unittest.TestCase):
         self.engine.generate = generate
 
     def test_a_call_the_request_never_offered_stays_text(self):
-        """#3075: the model goes on writing the format it was shown; a request that declared no tools gets text
-        (a request that declared tools has its vocabulary in the prompt - see
-        test_a_prompt_defined_tool_call_is_the_call_when_the_request_declares_tools)."""
+        """#3075: the model goes on writing the format it was shown; a request that offered no such tool gets text."""
         from serve.frontend import CALL_END, CALL_START
         answer = ("I will check that.\n" + CALL_START + "\n<function=lookup>\n<parameter=q>\n2+2\n</parameter>\n"
                   "</function>\n" + CALL_END + "\nHere is the report.")
         self.says(answer)
-        for label, extra in {"nothing declared": {"tools": []},
-                             "tool_choice none (no tool reaches the parser)": {"tool_choice": "none"}}.items():
+        for label, extra in {"nothing declared": {"tools": []}, "tool_choice none": {"tool_choice": "none"},
+                             "other tools": {}}.items():
             for stream in (False, True):
                 with self.subTest(case=label, stream=stream):
                     code, b = self.openai(stream=stream, **extra)
@@ -5246,15 +5244,28 @@ class ForcedToolChoice(unittest.TestCase):
         self.assertLessEqual(len(found), 1, "sent once, with the last chunk")
         return found[0] if found else None
 
+    def test_literal_xml_stays_text_with_declared_tools(self):
+        answer = "Example:\n<section>read only</section>"
+        self.says(answer)
+        for stream in (False, True):
+            with self.subTest(stream=stream):
+                code, b = self.openai(stream=stream)
+                finish, calls, _ = self.call_of(code, b, stream)
+                if stream:
+                    chunks = (json.loads(line[6:]) for line in b.splitlines() if line.startswith("data: {"))
+                    content = "".join(c["choices"][0]["delta"].get("content") or "" for c in chunks)
+                else:
+                    content = b["choices"][0]["message"]["content"]
+                self.assertEqual((finish, calls, content), ("stop", [], answer))
+
     def test_an_undeclared_call_is_named_in_the_response(self):
-        """#3796: with no tools declared the call stays text and finish_reason stays "stop"; the response also lists the
-        names the model wrote (strata_rejected_tool_calls), so a client can tell this from an ordinary answer and
-        answer the model.  (A request that declares tools takes the call instead - see the gate's other test.)"""
+        """#3796: the call stays text and finish_reason stays "stop"; the response also lists the names the model wrote
+        (strata_rejected_tool_calls), so a client can tell this from an ordinary answer and answer the model."""
         self.says(self._undeclared_call_answer("execute_gdscript"))
         for stream in (False, True):
             with self.subTest(stream=stream):
                 before = self.svc.totals.get("tool_calls_unread", 0)
-                code, b = self.openai(stream=stream, tools=[])
+                code, b = self.openai(stream=stream)
                 finish, calls, _ = self.call_of(code, b, stream)
                 self.assertEqual((finish, calls), ("stop", []), b)
                 self.assertEqual(self._rejected_of(b, stream), [{"name": "execute_gdscript", "reason": "undeclared"}])
@@ -5267,16 +5278,15 @@ class ForcedToolChoice(unittest.TestCase):
         guessed name); the marker names the closest declared tool as a hint.  A name close to nothing gets no hint."""
         tools = [{"type": "function", "function": {"name": n, "description": n, "parameters": {
             "type": "object", "properties": {"q": {"type": "string"}}}}} for n in ("read", "write", "search")]
-        # fork: accept_undeclared (intentional deviation) - a request that declares tools takes the call it wrote,
-        # under the name it wrote; nothing is guessed and no marker is sent.
-        for written in ("read_file", "Write", "serch", "execute_gdscript"):
+        for written, hint in (("read_file", "read"), ("Write", "write"), ("serch", "search"), ("execute_gdscript", None)):
             self.says(self._undeclared_call_answer(written))
             for stream in (False, True):
                 with self.subTest(written=written, stream=stream):
                     code, b = self.openai(stream=stream, tools=tools)
                     finish, calls, _ = self.call_of(code, b, stream)
-                    self.assertEqual((finish, calls), ("tool_calls", [(written, {"q": "2+2"})]), b)
-                    self.assertIsNone(self._rejected_of(b, stream))
+                    self.assertEqual((finish, calls), ("stop", []), b)
+                    want = {"name": written, "reason": "undeclared", **({"closest_declared": hint} if hint else {})}
+                    self.assertEqual(self._rejected_of(b, stream), [want])
 
     def test_closest_declared(self):
         from serve.server import closest_declared
@@ -5352,8 +5362,8 @@ class ForcedToolChoice(unittest.TestCase):
 
     def test_the_anthropic_reply_names_the_rejected_call_too(self):
         self.says(self._undeclared_call_answer("bash"))
-        # no tools declared: the call stays text and the reply names it
-        body = {"model": "m", "max_tokens": 400, "messages": [{"role": "user", "content": "2+2?"}], "tools": []}
+        body = {"model": "m", "max_tokens": 400, "messages": [{"role": "user", "content": "2+2?"}],
+                "tools": [{"name": "search", "description": "search", "input_schema": {"type": "object", "properties": {}}}]}
         req = urllib.request.Request(self.base + "/v1/messages", data=json.dumps(body).encode(),
                                      headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=30) as r:

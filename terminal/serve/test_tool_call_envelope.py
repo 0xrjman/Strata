@@ -163,7 +163,8 @@ class CodexWritesItsOwnTag(unittest.TestCase):
         raw = f"<tool_call>\n<apply_patch>\n{PATCH}\n</apply_patch>\n</tool_call>"
         for width in (0, 1, 3, 7):
             with self.subTest(width=width):
-                evs, p = run("I'll edit.\n" + raw + "\nDone.", width, tools=[], accept_undeclared=True)
+                evs, p = run("I'll edit.\n" + raw + "\nDone.", width,
+                             tools=[{"name": "apply_patch"}], accept_undeclared=True)
                 self.assertEqual(calls(evs), [("apply_patch", {})])
                 self.assertEqual([e.call.raw for e in evs if e.kind == "tool_call"], [PATCH])
                 self.assertEqual(text(evs), "I'll edit.Done.")
@@ -173,7 +174,8 @@ class CodexWritesItsOwnTag(unittest.TestCase):
         raw = f"<apply_patch>\n{PATCH}\n</apply_patch>"
         for width in (0, 1, 3, 7):
             with self.subTest(width=width):
-                evs, p = run("I'll edit.\n" + raw + "\nDone.", width, tools=[], accept_undeclared=True)
+                evs, p = run("I'll edit.\n" + raw + "\nDone.", width,
+                             tools=[{"name": "apply_patch"}], accept_undeclared=True)
                 self.assertEqual(calls(evs), [("apply_patch", {})])
                 self.assertEqual([e.call.raw for e in evs if e.kind == "tool_call"], [PATCH])
                 self.assertEqual(text(evs), "I'll edit.Done.")

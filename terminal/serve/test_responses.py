@@ -629,6 +629,26 @@ class OverHttp(Server):
         self.engine.scripts = [self.tok.encode(text + "<|im_end|>", parse_special=True)]
         self.engine.script = self.engine.scripts[0]
 
+    def test_bare_tool_tags_require_a_codex_turn_and_a_declared_name(self):
+        xml = "<section>read only</section>"
+        patch = "*** Begin Patch\n*** End Patch"
+        answer = f"{xml}\n<apply_patch>\n{patch}\n</apply_patch>"
+        self.say(answer)
+        ask = {"model": "m", "input": "hi", "reasoning": {"effort": "none"},
+               "tools": [{"type": "custom", "name": "apply_patch"}]}
+        for stream in (False, True):
+            for metadata, codex in (({}, False), ({"x-codex-turn-metadata": "{"}, False),
+                                    (codex_meta("compaction"), False), (codex_meta("turn"), True)):
+                with self.subTest(stream=stream, metadata=metadata):
+                    code, result = self.post({**ask, "stream": stream, "client_metadata": metadata})
+                    self.assertEqual(code, 200, result)
+                    output = (result[-1]["response"] if stream else result)["output"]
+                    self.assertEqual([item["type"] for item in output],
+                                     ["message", "custom_tool_call"] if codex else ["message"])
+                    self.assertEqual(output[0]["content"][0]["text"], xml if codex else answer)
+                    if codex:
+                        self.assertEqual((output[1]["name"], output[1]["input"]), ("apply_patch", patch))
+
     def test_json_format_cut_by_the_cap_ends_incomplete(self):
         answer = "{\"a\": \"bcdefghijklmnopqrstuvwxyz\"}"
         self.say(answer)
@@ -819,9 +839,9 @@ class ToolRoundTrip(Server):
             code, r = self.post({"model": "m", "input": "go", "tools": tools, "stream": stream})
             self.assertEqual(code, 200, r)
             output = r[-1]["response"]["output"] if stream else r["output"]
-            # not an alias of either: the call comes back as the name the model wrote, never as a namespace's tool
-            self.assertEqual([(item.get("namespace"), item["name"]) for item in output
-                              if item.get("type") == "function_call"], [(None, "a__b__c")], output)
+            # not an alias of either: with tools declared (the 0.2.2 rule, #3075) a call for an undeclared name stays text
+            self.assertFalse([item for item in output if item.get("type") == "function_call"], output)
+            self.assertIn("a__b__c", json.dumps(output))
 
         # A declared exact name wins over alias spellings and keeps its string schema.
         tools.append({"type": "function", "name": "a__b__c", "parameters": {
@@ -1083,22 +1103,20 @@ class ForcedToolChoice(Server):
                 self.assertEqual(r["status"], "completed")
                 self.assertEqual([(o["type"], o["status"], o.get("arguments")) for o in r["output"]],
                                  [("function_call", "incomplete", "{")])
-        self.engine.first_name = "nosuch"
-        # fork: accept_undeclared (intentional deviation) - a name the request never offered is a call, not text
+        self.engine.first_name = "nosuch"            # "required": a name that is no tool is text, which a format refuses
         r = self.final(self.request(tool_choice="required", **self.NO_THINKING))
-        self.assertEqual([(o["type"], o.get("name")) for o in r["output"]], [("function_call", "nosuch")])
+        self.assertEqual([o["type"] for o in r["output"]], ["message"])
         code, r = self.post(self.request(tool_choice="required", **fmt, **self.NO_THINKING))
-        self.assertEqual(code, 200, r)
-        self.assertEqual([(o["type"], o.get("name")) for o in r["output"]], [("function_call", "nosuch")])
+        self.assertEqual((code, r["error"]["code"]), (502, "structured_output_failed"))
         self.svc.engine = MockEngine(self.tok, "Still thinking", max_context=16384)   # the reply ends inside the thinking
         r = self.final(self.request(tool_choice=self.NAMED))
         self.assertEqual([o["type"] for o in r["output"]], ["reasoning"])
 
     def test_a_name_the_request_never_offered_stays_text(self):
-        # fork: accept_undeclared (intentional deviation) - the call binds under the name the model wrote
         self.engine.first_name = "nosuch"
         r = self.final(self.request(tool_choice="required", **self.NO_THINKING))
-        self.assertEqual([(o["type"], o.get("name")) for o in r["output"]], [("function_call", "nosuch")])
+        self.assertEqual([o["type"] for o in r["output"]], ["message"])
+        self.assertIn("<function=nosuch>", r["output"][0]["content"][0]["text"])
 
     def test_auto_absent_and_none_leave_the_tools_to_the_model(self):
         for extra in ({}, {"tool_choice": "auto"}, {"tool_choice": "none"}):
@@ -1127,8 +1145,8 @@ class ForcedToolChoice(Server):
                 self.assertEqual(code, 200, r)
                 self.assertEqual([o["type"] for o in r["output"]], ["message"])
                 self.assertEqual(log.getvalue().count("[strata] tool_choice"), 1, log.getvalue())
-        # fork: accept_undeclared (intentional deviation) - a hosted `web_search` is declared under its own name, so
-        # "required" is honourable: the call opens and the choice is not logged as odd.
+        # A client-run web_search is declared under its own name.
+        self.engine.first_name = "web_search"
         log = io.StringIO()
         code, r = self.post(self.request(tool_choice="required", tools=[{"type": "web_search"}],
                                           **self.NO_THINKING), log=log)
@@ -1205,9 +1223,9 @@ class CodexCompactionOverHttp(Server):
         self.parser_tools = []
         run = self.svc.run
 
-        def recorded(ids, thinking, tools, *rest):
+        def recorded(ids, thinking, tools, *rest, **kwargs):
             self.parser_tools.append(tools)
-            return run(ids, thinking, tools, *rest)
+            return run(ids, thinking, tools, *rest, **kwargs)
         self.svc.run = recorded
 
     def compaction(self, meta, output="before", between=None, **extra):

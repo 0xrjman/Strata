@@ -33,13 +33,10 @@ __pycache__/
 engine/third_party/llama.cpp/
 terminal/third_party/llama.cpp/
 engine/third_party/*.zip
+/third_party/llama.cpp-*.zip
 *.done
 *.log
 strata-*.json
 strata-*.txt
 run-*.sh
 run-*.bat
-
-# the vendored pinned llama.cpp archive, so the build never reaches github.com (setup.py skips the download when the .done mark is there)
-!third_party/llama.cpp-3cf0325.zip
-!third_party/llama.cpp-3cf0325.zip.done
