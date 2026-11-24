@@ -1,0 +1,12 @@
+libgomp.so.1 is the GNU OpenMP runtime, part of GCC.
+
+The Inkling engine package carries an unmodified copy of libgomp.so.1 from the build machine.
+
+Copyright: Free Software Foundation, Inc.
+License: GNU General Public License version 3 or later, with the GCC Runtime Library Exception version 3.1
+(SPDX: GPL-3.0-or-later WITH GCC-exception-3.1).
+  GPL-3.0: https://www.gnu.org/licenses/gpl-3.0.html
+  GCC Runtime Library Exception: https://www.gnu.org/licenses/gcc-exception-3.1.html
+
+Source: https://gcc.gnu.org/ (libgomp directory). The exact source is available from the distribution source package
+that built the library identified below.
