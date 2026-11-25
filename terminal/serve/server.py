@@ -8514,7 +8514,9 @@ def make_handler(svc: Service):
                 yield from asm.start()
                 done = None
                 quiet = time.monotonic()                     # #7132: the last time a byte went out
-                for kind, x in svc.run(ids, thinking, tools, max_new, req, cancel, force):
+                request_kind, conversation = responses_api._codex_turn(req)
+                codex_turn = request_kind == "turn" and conversation is not None and req.get("tool_choice") != "none"
+                for kind, x in svc.run(ids, thinking, tools, max_new, req, cancel, force, codex_turn=codex_turn):
                     if kind == "ping":
                         quiet = time.monotonic()
                         yield None
